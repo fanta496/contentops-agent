@@ -96,7 +96,7 @@ internal static class CardRenderer
             using (var footBold = SafeFont(25, FontStyle.Bold))
             using (var footBrush = new SolidBrush(muted))
             {
-                graphics.DrawString(String.IsNullOrWhiteSpace(account) ? "企业内容增长实验" : account, footBold, footBrush, new RectangleF(92, 1290, 500, 45));
+                graphics.DrawString(String.IsNullOrWhiteSpace(account) ? "内容增长实验" : account, footBold, footBrush, new RectangleF(92, 1290, 500, 45));
                 graphics.DrawString("由数据决定下一轮", footFont, footBrush, new RectangleF(590, 1290, 398, 45), new StringFormat { Alignment = StringAlignment.Far });
             }
 

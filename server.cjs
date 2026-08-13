@@ -38,7 +38,7 @@ const PROFILE_DIR = path.join(DATA_DIR, 'profiles');
 // Initialize the per-profile credential cache before loading any state.
 const PROFILE_CREDENTIAL_STORES = new Map();
 const GENERATED_IMAGE_DIR = path.join(DATA_DIR, 'generated-images');
-// 企业原图是本机业务资产，和模型凭据、运行状态分开保存。图片内容不会写入 state.json，
+// 参考图片是本机项目资产，和模型凭据、运行状态分开保存。图片内容不会写入 state.json，
 // 只保存不可猜测的元数据和相对文件名，避免状态文件膨胀及意外泄露。
 const ENTERPRISE_ASSET_DIR = path.join(DATA_DIR, 'enterprise-assets');
 // Only isolated QA runs may bypass enterprise-image requirements.  A normal
@@ -70,7 +70,7 @@ function initialState() {
     settings: { masterEnabled: false, textProfiles: [], visionProfiles: [], imageProfiles: [], activeTextProfileId: '', activeVisionProfileId: '', activeImageProfileId: '', collectionEnabled: false, workflowAutoEnabled: false, autoMorningTime: '10:00', autoAfternoonTime: '17:00', lastAutomaticSlot: '', manualRawLimit: 50, automaticRawLimit: 200, manualFinalLimit: 10, automaticFinalLimit: 10, dailyCandidateLimit: 500, aiAnalysisLimit: 20, analysisConcurrency: 3, analysisAutoRetryCount: 2, creationAutoRetryCount: 2, generationCount: 10, scaleGenerationCount: 5, imageCount: 4, imageAspectRatio: '2:3', imageSize: '1024x1536', imageTextMode: 'free', imageStyle: 'realistic', imageMaxConcurrentJobs: 4, concurrencyProfileVersion: 1, imageQualityReviewEnabled: true, imageQualityThreshold: 78, imageAutoRetryCount: 1, imagePipelineVersion: 3, brandColors: [], mustShow: [], prohibitedElements: [], imageDailyBudget: 30, imageSpentToday: 0, imageCostPerImage: 0, dailyBudget: 30, spentToday: 0, visionDailyBudget: 30, visionSpentToday: 0, usageDate: DAY(), candidatesToday: 0, analysesToday: 0, generationsToday: 0, imageGenerationsToday: 0, xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['内容运营'], xhsMaxPerKeyword: 50, xhsScrollRounds: 2, xhsDelayMs: 2500, douyinDelayMs: 3500, xhsChromePort: 17841, douyinChromePort: 17842, performanceAutoEnabled: true, performanceSampleHours: [2, 24, 72], performanceAccountBaselineNotes: 12, performanceLastAutomaticSlot: '', performanceNextAttemptAt: '', performancePausedCode: '', performanceLastAlertKey: '', performanceLastAlertAt: '', feishuWebhook: '', aiBaseUrl: '', aiModel: '', aiInputPricePerMillion: 0, aiOutputPricePerMillion: 0, aiCredentialConfigured: false, lastAiCheckAt: '', lastAiCheckOk: false, visionBaseUrl: 'https://api.tu-zi.com', visionModel: '', visionInputPricePerMillion: 0, visionOutputPricePerMillion: 0, visionMaxImages: 12, visionCredentialConfigured: false, lastVisionCheckAt: '', lastVisionCheckOk: false },
     agents: [
       { id: 'orchestrator', name: '内容总管 Agent', type: '编排', status: 'idle', detail: '等待人工启动或下一次定时任务', lastHeartbeat: now(), restarts: 0 },
-      { id: 'supervisor', name: '值班主管 Agent', type: '管理', status: 'healthy', detail: '全局心跳正常', lastHeartbeat: now(), restarts: 0 },
+    { id: 'supervisor', name: '运行监控 Agent', type: '监控', status: 'healthy', detail: '全局心跳正常', lastHeartbeat: now(), restarts: 0 },
       { id: 'xhs-collector', name: '抓取 Agent', type: '抓取', status: 'needs_login', detail: '负责抓什么与何时抓；执行工具等待小红书登录', tool: '小红书专用 Chrome 采集器', lastHeartbeat: now(), restarts: 0 },
       { id: 'douyin-collector', name: '抖音抓取 Agent', type: '抓取', status: 'needs_login', detail: '负责低频搜索公开抖音图文；等待专用浏览器登录确认', tool: '抖音专用 Chrome 采集器', lastHeartbeat: now(), restarts: 0 },
       { id: 'analyst', name: '爆款分析 Agent', type: '分析', status: 'healthy', detail: '评分队列为空', lastHeartbeat: now(), restarts: 0 },
@@ -449,7 +449,7 @@ function normalizeEnterpriseImageAsset(value = {}) {
 function enterpriseAssetPath(file) {
   const resolved = path.resolve(ENTERPRISE_ASSET_DIR, safeText(file, 500));
   const relative = path.relative(ENTERPRISE_ASSET_DIR, resolved);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('企业图片文件路径不正确');
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('参考图片文件路径不正确');
   return resolved;
 }
 function detectImageMime(bytes) {
@@ -464,7 +464,7 @@ function imageExtension(mime) { return mime === 'image/jpeg' ? '.jpg' : mime ===
 function stageEnterpriseImageRemoval(asset) {
   const source = enterpriseAssetPath(asset.file);
   const stat = fs.statSync(source);
-  if (!stat.isFile()) throw new Error('企业图片存储对象不是普通文件，已拒绝删除以保护资料库');
+  if (!stat.isFile()) throw new Error('参考图片存储对象不是普通文件，已拒绝删除以保护资料库');
   const trash = path.join(ENTERPRISE_ASSET_DIR, '.trash', `${uid('enterprise-image-delete')}${path.extname(source)}`);
   fs.mkdirSync(path.dirname(trash), { recursive:true });
   fs.renameSync(source, trash);
@@ -504,15 +504,15 @@ function sanitizeEnterpriseProfile(profile = {}) {
   };
 }
 function enterpriseProductionReadiness(profile) {
-  if (!profile || profile.status !== 'active') return { ready:false, reason:'请先建立并启用企业素材库' };
+  if (!profile || profile.status !== 'active') return { ready:false, reason:'请先建立并启用项目资料库' };
   const clean = sanitizeEnterpriseProfile(profile);
   const hasIdentity = Boolean(clean.brandName || clean.productName);
   const hasGrounding = Boolean(clean.productName || clean.positioning || clean.productFacts.length || clean.sellingPoints.length || clean.proofPoints.length);
-  if (!hasIdentity || !hasGrounding) return { ready:false, reason:'企业素材库资料不足：请至少填写真实品牌或产品，并补充产品/服务、定位、事实、卖点或证据中的一项' };
+  if (!hasIdentity || !hasGrounding) return { ready:false, reason:'项目资料库资料不足：请至少填写真实品牌或产品，并补充产品/服务、定位、事实、卖点或证据中的一项' };
   return { ready:true, profile:clean };
 }
 function containsInternalProductionLanguage(value) {
-  return /(?:企业素材库|企业资料库|资料库当前|素材库当前|占位信息|占位内容|未提供(?:具体|有效|相关)?(?:产品|企业|品牌|资料|信息|素材)|系统配置|模型配置|提示词|AI\s*工作流|内部状态)/i.test(safeText(value, 10000));
+  return /(?:项目素材库|项目资料库|资料库当前|素材库当前|占位信息|占位内容|未提供(?:具体|有效|相关)?(?:产品|项目|品牌|资料|信息|素材)|系统配置|模型配置|提示词|AI\s*工作流|生产状态)/i.test(safeText(value, 10000));
 }
 function exportFileName(value, fallback = '资料库') {
   const text = safeText(value, 120).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').trim();
@@ -522,29 +522,29 @@ function exportEnterpriseProfile(profile, directory) {
   const base = safeText(directory, 2000);
   if (!base || !path.isAbsolute(base)) return { ok:false, message:'请填写本机绝对导出文件夹路径' };
   const snapshotId = uid('enterprise-export');
-  const folder = path.resolve(base, `企业资料库-${exportFileName(profile.name)}-${snapshotId}`);
+  const folder = path.resolve(base, `项目资料库-${exportFileName(profile.name)}-${snapshotId}`);
   const relative = path.relative(path.resolve(base), folder);
   if (relative.startsWith('..') || path.isAbsolute(relative)) return { ok:false, message:'导出目录不正确' };
   const assets = (profile.imageAssets || []).map((asset, index) => {
     const source = enterpriseAssetPath(asset.file);
-    if (!fs.existsSync(source)) throw new Error(`企业图片文件缺失：${asset.name}`);
+    if (!fs.existsSync(source)) throw new Error(`参考图片文件缺失：${asset.name}`);
     const extension = imageExtension(asset.mime);
-    return { asset, source, outputFile:`images/${String(index + 1).padStart(2, '0')}-${exportFileName(asset.name, '企业图片')}${extension}` };
+    return { asset, source, outputFile:`images/${String(index + 1).padStart(2, '0')}-${exportFileName(asset.name, '参考图片')}${extension}` };
   });
   const temporary = `${folder}.tmp`;
   try {
     fs.mkdirSync(path.join(temporary, 'images'), { recursive:true });
     for (const item of assets) fs.copyFileSync(item.source, path.join(temporary, item.outputFile));
     const snapshot = { format:'contentops-enterprise-library-v1', exportedAt:now(), profile:{ ...profile, imageAssets:assets.map(({ asset, outputFile }) => ({ ...asset, file:outputFile })) } };
-    fs.writeFileSync(path.join(temporary, '企业资料库.json'), JSON.stringify(snapshot, null, 2), 'utf8');
-    fs.writeFileSync(path.join(temporary, '说明.txt'), `企业素材库快照\n名称：${profile.name}\n导出时间：${snapshot.exportedAt}\n图片：${assets.length} 张\n\n本包包含企业资料库.json 与 images 文件夹。图片说明、用途分类和限制说明均保存在 JSON 清单中。\n`, 'utf8');
+    fs.writeFileSync(path.join(temporary, '项目资料库.json'), JSON.stringify(snapshot, null, 2), 'utf8');
+    fs.writeFileSync(path.join(temporary, '说明.txt'), `项目资料库快照\n名称：${profile.name}\n导出时间：${snapshot.exportedAt}\n图片：${assets.length} 张\n\n本包包含项目资料库.json 与 images 文件夹。图片说明、用途分类和限制说明均保存在 JSON 清单中。\n`, 'utf8');
     fs.renameSync(temporary, folder);
   } catch (error) {
     try { fs.rmSync(temporary, { recursive:true, force:true }); } catch {}
-    return { ok:false, message:`企业资料库导出失败：${error.message}` };
+    return { ok:false, message:`项目资料库导出失败：${error.message}` };
   }
   const beforeLog = structuredClone(state);
-  try { addActivity('success', '企业资料库已导出', `${profile.name} · ${assets.length}张图片 · ${folder}`); saveState(); }
+  try { addActivity('success', '项目资料库已导出', `${profile.name} · ${assets.length}张图片 · ${folder}`); saveState(); }
   catch { state = beforeLog; }
   if (!SELF_TEST && !process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED && process.env.CONTENTOPS_OPEN_EXPORT_FOLDER !== '0') try { spawn('explorer.exe', [folder], { detached:true, stdio:'ignore' }).unref(); } catch {}
   return { ok:true, path:folder, imageCount:assets.length, warning: state === beforeLog ? '快照已生成，但运行日志未能保存；无需重复导出。' : '' };
@@ -1547,7 +1547,7 @@ function supervisorCheck({ persist = true } = {}) {
   for (const agent of state.agents) {
     if (agent.id === 'supervisor' || agent.status === 'disabled') continue;
     const staleFor = time - new Date(agent.lastHeartbeat).getTime();
-    if (agent.status === 'running' && staleFor > 5 * 60 * 1000) { agent.status = 'warning'; agent.detail = '任务运行超时，等待人工或主管重启'; addActivity('warning', `${agent.name}疑似卡死`, '运行超过5分钟没有完成心跳'); changed = true; }
+      if (agent.status === 'running' && staleFor > 5 * 60 * 1000) { agent.status = 'warning'; agent.detail = '任务运行超时，等待人工重新检查'; addActivity('warning', `${agent.name}疑似卡死`, '运行超过5分钟没有完成心跳'); changed = true; }
   }
   const issues = state.agents.filter((agent) => agent.id !== 'supervisor' && ['warning', 'needs_login', 'verification_required'].includes(agent.status) && !(agent.id === 'xhs-collector' && !state.settings.xhsEnabled) && !(agent.id === 'douyin-collector' && !state.settings.douyinEnabled));
   const supervisor = state.agents.find((agent) => agent.id === 'supervisor');
@@ -1563,7 +1563,7 @@ function normalizeGeneratedVariants(candidate, variants, count) {
   const allowLegacyTestGrounding = TEST_ENTERPRISE_IMAGE_BYPASS;
   return variants.slice(0, count).map((item, index) => ({
     id: uid('variant'), candidateId: candidate.id, index: index + 1, platform: candidate.platform || '小红书', account: safeText(item.account, 80) || `内容账号${index + 1}`, format: safeText(item.format, 80) || '图文', audience: safeText(item.audience, 120),
-    title: safeText(item.title, 180), body: safeText(item.body, 8000), tags: normalizeTextList(item.tags, 12, 60), productionWarnings: containsInternalProductionLanguage(`${item.title || ''}\n${item.body || ''}`) ? ['标题或正文可能含有内部生产术语，请在工作台人工确认并修改'] : [],
+    title: safeText(item.title, 180), body: safeText(item.body, 8000), tags: normalizeTextList(item.tags, 12, 60), productionWarnings: containsInternalProductionLanguage(`${item.title || ''}\n${item.body || ''}`) ? ['标题或正文可能含有生产术语，请在工作台人工确认并修改'] : [],
     visualStrategy: item.visualStrategy && typeof item.visualStrategy === 'object' ? { concept:safeText(item.visualStrategy.concept, 500), coverHook:safeText(item.visualStrategy.coverHook, 500), continuity:safeText(item.visualStrategy.continuity, 800), palette:normalizeTextList(item.visualStrategy.palette, 8, 80), avoidGeneric:normalizeTextList(item.visualStrategy.avoidGeneric, 10, 200) } : {},
     enterpriseGrounding: item.enterpriseGrounding && typeof item.enterpriseGrounding === 'object' ? {
       productAngle: safeText(item.enterpriseGrounding.productAngle, 500),
@@ -1583,7 +1583,7 @@ async function generateWithAi(candidate, count = state.settings.generationCount,
   if (!aiReady() && process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED !== '1') return { ok: false, code: 'AI_NOT_CONFIGURED', message: '还需配置并验证模型 API' };
   if (budgetRemaining() <= 0) return { ok: false, code: 'BUDGET_LIMIT', message: '今日 AI 预算已耗尽' };
   const enterprise = state.enterpriseProfiles.find((item) => item.id === state.activeEnterpriseProfileId && item.status === 'active');
-  if (!enterprise) return { ok: false, code: 'ENTERPRISE_PROFILE_REQUIRED', message: '请先建立并启用企业素材库，才能开始一做' };
+  if (!enterprise) return { ok: false, code: 'ENTERPRISE_PROFILE_REQUIRED', message: '请先建立并启用项目资料库，才能开始一做' };
   const readiness = enterpriseProductionReadiness(enterprise);
   if (!readiness.ready) return { ok:false, code:'ENTERPRISE_PROFILE_INSUFFICIENT', message:readiness.reason };
   const productionEnterprise = readiness.profile;
@@ -1613,11 +1613,11 @@ async function generateWithAi(candidate, count = state.settings.generationCount,
   }
   if (requireMaster && masterStopped(generation)) return stopResult(); const rawVariants = Array.isArray(result.data?.variants) ? result.data.variants : []; const variants = normalizeGeneratedVariants(candidate, rawVariants, count);
   if (variants.length !== count) {
-    const diagnostics = rawVariants.slice(0, count).map((item, index) => { const pages = Array.isArray(item?.imagePages) ? item.imagePages : []; const grounding = item?.enterpriseGrounding || {}; const reasons = []; if (!safeText(item?.title, 180)) reasons.push('缺标题'); if (!safeText(item?.body, 8000)) reasons.push('缺正文'); if (containsInternalProductionLanguage(`${item?.title || ''}\n${item?.body || ''}`)) reasons.push('正文含内部生产术语'); if (!safeText(grounding.productAngle, 500)) reasons.push('缺企业表达角度'); if (!normalizeTextList(grounding.factsUsed, 8, 500).some(meaningfulEnterpriseLine)) reasons.push('缺企业事实依据'); if (pages.length !== imageRules.imageCount) reasons.push(`图片页${pages.length}/${imageRules.imageCount}`); if (pages.some((page) => !meaningfulEnterpriseLine(page?.copy))) reasons.push('存在空白上图文案'); if (pages.some((page) => !promptText(page?.imagePrompt, 6000).trim())) reasons.push('存在空白生图提示词'); return `第${index + 1}套：${reasons.join('、') || '字段归一化失败'}`; });
+    const diagnostics = rawVariants.slice(0, count).map((item, index) => { const pages = Array.isArray(item?.imagePages) ? item.imagePages : []; const grounding = item?.enterpriseGrounding || {}; const reasons = []; if (!safeText(item?.title, 180)) reasons.push('缺标题'); if (!safeText(item?.body, 8000)) reasons.push('缺正文'); if (containsInternalProductionLanguage(`${item?.title || ''}\n${item?.body || ''}`)) reasons.push('正文含生产术语'); if (!safeText(grounding.productAngle, 500)) reasons.push('缺项目表达角度'); if (!normalizeTextList(grounding.factsUsed, 8, 500).some(meaningfulEnterpriseLine)) reasons.push('缺项目事实依据'); if (pages.length !== imageRules.imageCount) reasons.push(`图片页${pages.length}/${imageRules.imageCount}`); if (pages.some((page) => !meaningfulEnterpriseLine(page?.copy))) reasons.push('存在空白上图文案'); if (pages.some((page) => !promptText(page?.imagePrompt, 6000).trim())) reasons.push('存在空白生图提示词'); return `第${index + 1}套：${reasons.join('、') || '字段归一化失败'}`; });
     throw new Error(`模型应返回 ${count} 套完整图文，实际可用 ${variants.length} 套；${diagnostics.join('；') || `接口未返回 variants 数组（实际类型 ${typeof result.data?.variants}）`}`);
   }
   const assetIds = new Set(usableAssets.map((asset) => asset.id));
-  if (variants.some((variant) => (variant.enterpriseGrounding?.assetIds || []).some((id) => !assetIds.has(id)))) throw new Error('模型返回了不存在的企业图片素材编号，结果未写入；请重试一做');
+  if (variants.some((variant) => (variant.enterpriseGrounding?.assetIds || []).some((id) => !assetIds.has(id)))) throw new Error('模型返回了不存在的参考图片编号，结果未写入；请重试一做');
   const cost = recordAiUsage(result.usage, '图文策划'); state.settings.generationsToday += variants.length;
   candidate.creationTask ||= {}; Object.assign(candidate.creationTask, { status:'completed', attempts:attempt + 1, lastError:'', nextRetryAt:'', completedAt:now(), updatedAt:now() });
   setAgent('creator', { status: 'idle', detail: `最近完成 ${variants.length} 套策划稿，等待人工编辑和生图` }); return { ok: true, variants, cost };
@@ -1848,7 +1848,7 @@ function selectedEnterpriseImageAssets(item, enterprise) {
 function enterpriseReferenceImages(item, enterprise) {
   return selectedEnterpriseImageAssets(item, enterprise).map((asset) => {
     const file = enterpriseAssetPath(asset.file);
-    if (!fs.existsSync(file)) throw new Error(`企业参考图文件不存在：${asset.name}`);
+    if (!fs.existsSync(file)) throw new Error(`参考图文件不存在：${asset.name}`);
     return { assetId:asset.id, name:path.basename(file), mime:asset.mime, bytes:fs.readFileSync(file) };
   });
 }
@@ -1899,11 +1899,11 @@ function startVariantImageJob(item, pageIds = [], options = {}) {
     const policy = ['auto', 'required', 'disabled'].includes(item.imageReferencePolicy) ? item.imageReferencePolicy : 'auto';
     let availableReferences = [];
     try { availableReferences = policy === 'disabled' ? [] : enterpriseReferenceImages(item, enterprise); }
-    catch (error) { failImageJob(item, 'failed', `${error.message}；本次没有调用生图 API，请修复企业素材库后重试`); return; }
+    catch (error) { failImageJob(item, 'failed', `${error.message}；本次没有调用生图 API，请修复项目资料库后重试`); return; }
     let effectiveInputMode = 'text_only';
     if (policy === 'required') {
-      if (!['reference_edit', 'reference_generation_json'].includes(connection.imageInputMode)) { failImageJob(item, 'failed', '本套内容要求使用企业原图，但当前生图连接档案未启用参考图模式；为避免假装使用企业图，本次没有调用生图 API'); return; }
-      if (!availableReferences.length) { failImageJob(item, 'failed', '本套内容要求使用企业原图，但一做策划没有选中可用的企业图片；请补充企业图片并重新生成一做策划'); return; }
+      if (!['reference_edit', 'reference_generation_json'].includes(connection.imageInputMode)) { failImageJob(item, 'failed', '本套内容要求使用参考图，但当前生图连接档案未启用参考图模式；为避免假装使用参考图，本次没有调用生图 API'); return; }
+      if (!availableReferences.length) { failImageJob(item, 'failed', '本套内容要求使用参考图，但一做策划没有选中可用的参考图片；请补充参考图片并重新生成一做策划'); return; }
       effectiveInputMode = connection.imageInputMode;
     } else if (policy === 'auto' && ['reference_edit', 'reference_generation_json'].includes(connection.imageInputMode) && availableReferences.length) {
       effectiveInputMode = connection.imageInputMode;
@@ -2005,18 +2005,18 @@ async function handleAction(route, body) {
     else next.enterpriseProfiles.unshift(incoming);
     const savedProfile = existing || incoming;
     if ((!next.activeEnterpriseProfileId || body.makeActive === true) && savedProfile.status === 'active') next.activeEnterpriseProfileId = savedProfile.id;
-    addActivityTo(next, existing ? 'info' : 'success', existing ? '企业素材库已更新' : '企业素材库已创建', `${incoming.name} · ${incoming.brandName || incoming.productName}`);
+    addActivityTo(next, existing ? 'info' : 'success', existing ? '项目资料库已更新' : '项目资料库已创建', `${incoming.name} · ${incoming.brandName || incoming.productName}`);
     const committed = commitStateSnapshot(next); const persisted = committed.enterpriseProfiles.find((item) => item.id === savedProfile.id);
     return { ok: true, profile: persisted, active: committed.activeEnterpriseProfileId === savedProfile.id };
   }
   if (route === '/api/enterprise-profile/export') {
     const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.profileId, 120));
-    if (!profile) return { ok:false, message:'未找到企业素材库' };
+    if (!profile) return { ok:false, message:'未找到项目资料库' };
     return exportEnterpriseProfile(profile, body.directory);
   }
   if (route === '/api/enterprise-image/upload') {
     const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.profileId, 120) && item.status === 'active');
-    if (!profile) return { ok:false, message:'请先选择一个有效的企业素材库' };
+    if (!profile) return { ok:false, message:'请先选择一个有效的项目资料库' };
     const mime = safeText(body.mime, 80);
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return { ok:false, message:'仅支持 JPG、PNG、WebP 图片' };
     const data = safeText(body.data, 14 * 1024 * 1024);
@@ -2030,46 +2030,46 @@ async function handleAction(route, body) {
     const relative = `${profile.id}/${asset.id}${ext}`;
     asset.file = relative;
     const target = enterpriseAssetPath(relative); const temporary = `${target}.${uid('upload')}.tmp`; fs.mkdirSync(path.dirname(target), { recursive:true });
-    try { fs.writeFileSync(temporary, bytes, { flag:'wx' }); fs.renameSync(temporary, target); const next = structuredClone(state); const nextProfile = next.enterpriseProfiles.find((item) => item.id === profile.id); nextProfile.imageAssets.push(asset); nextProfile.updatedAt = now(); addActivityTo(next, 'success', '企业图片素材已入库', `${profile.name} · ${asset.name}`); commitStateSnapshot(next); return { ok:true, asset }; }
-    catch (error) { try { fs.rmSync(temporary, { force:true }); fs.rmSync(target, { force:true }); } catch {} return { ok:false, message:`企业图片未保存：${error.message}` }; }
+    try { fs.writeFileSync(temporary, bytes, { flag:'wx' }); fs.renameSync(temporary, target); const next = structuredClone(state); const nextProfile = next.enterpriseProfiles.find((item) => item.id === profile.id); nextProfile.imageAssets.push(asset); nextProfile.updatedAt = now(); addActivityTo(next, 'success', '参考图片已入库', `${profile.name} · ${asset.name}`); commitStateSnapshot(next); return { ok:true, asset }; }
+    catch (error) { try { fs.rmSync(temporary, { force:true }); fs.rmSync(target, { force:true }); } catch {} return { ok:false, message:`参考图片未保存：${error.message}` }; }
   }
   if (route === '/api/enterprise-image/delete') {
     const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.profileId, 120));
-    if (!profile) return { ok:false, message:'未找到企业素材库' };
+    if (!profile) return { ok:false, message:'未找到项目资料库' };
     const index = profile.imageAssets.findIndex((asset) => asset.id === safeText(body.assetId, 120));
-    if (index < 0) return { ok:false, message:'未找到企业图片素材' };
+    if (index < 0) return { ok:false, message:'未找到参考图片' };
     const asset = profile.imageAssets[index]; let stage;
-    if (asset.file !== `${profile.id}/${asset.id}${imageExtension(asset.mime)}`) return { ok:false, message:'企业图片归属校验失败，已拒绝删除以保护其他资料库' };
-    try { stage = stageEnterpriseImageRemoval(asset); } catch (error) { return { ok:false, message:`企业图片未删除：${error.message}` }; }
+    if (asset.file !== `${profile.id}/${asset.id}${imageExtension(asset.mime)}`) return { ok:false, message:'参考图片归属校验失败，已拒绝删除以保护其他资料库' };
+    try { stage = stageEnterpriseImageRemoval(asset); } catch (error) { return { ok:false, message:`参考图片未删除：${error.message}` }; }
     const previousUpdatedAt = profile.updatedAt; const previousActivity = state.activity.slice();
-    profile.imageAssets.splice(index, 1); profile.updatedAt = now(); addActivity('info', '企业图片素材已删除', `${profile.name} · ${asset.name}`);
+    profile.imageAssets.splice(index, 1); profile.updatedAt = now(); addActivity('info', '参考图片已删除', `${profile.name} · ${asset.name}`);
     try { saveState(); } catch (error) {
       profile.imageAssets.splice(index, 0, asset); profile.updatedAt = previousUpdatedAt; state.activity = previousActivity;
       try { rollbackEnterpriseImageRemoval(stage); } catch {}
-      return { ok:false, message:`企业图片未删除：保存资料库失败，已回滚：${error.message}` };
+      return { ok:false, message:`参考图片未删除：保存资料库失败，已回滚：${error.message}` };
     }
-    try { finalizeEnterpriseImageRemoval(stage); } catch (error) { addActivity('warning', '企业图片待清理', `${profile.name} · ${asset.name}：${error.message}`); saveState(); }
+    try { finalizeEnterpriseImageRemoval(stage); } catch (error) { addActivity('warning', '参考图片待清理', `${profile.name} · ${asset.name}：${error.message}`); saveState(); }
     return { ok:true };
   }
   if (route === '/api/enterprise-profile/activate') {
     const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.id, 120));
-    if (!profile) return { ok: false, message: '未找到企业素材库' };
+    if (!profile) return { ok: false, message: '未找到项目资料库' };
     if (profile.status !== 'active') return { ok: false, message: '已停用的资料库不能用于生产' };
     state.activeEnterpriseProfileId = profile.id; addActivity('success', '已切换生产资料库', profile.name); saveState(); return { ok: true };
   }
   if (route === '/api/enterprise-profile/archive') {
     const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.id, 120));
-    if (!profile) return { ok: false, message: '未找到企业素材库' };
+    if (!profile) return { ok: false, message: '未找到项目资料库' };
     profile.status = 'archived'; profile.updatedAt = now();
     if (state.activeEnterpriseProfileId === profile.id) state.activeEnterpriseProfileId = state.enterpriseProfiles.find((item) => item.id !== profile.id && item.status === 'active')?.id || '';
-    addActivity('warning', '企业素材库已停用', profile.name); saveState(); return { ok: true };
+    addActivity('warning', '项目资料库已停用', profile.name); saveState(); return { ok: true };
   }
   if (route === '/api/enterprise-profile/restore') {
     const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.id, 120));
-    if (!profile) return { ok: false, message: '未找到企业素材库' };
+    if (!profile) return { ok: false, message: '未找到项目资料库' };
     profile.status = 'active'; profile.updatedAt = now();
     if (!state.activeEnterpriseProfileId) state.activeEnterpriseProfileId = profile.id;
-    addActivity('info', '企业素材库已恢复', profile.name); saveState(); return { ok: true };
+    addActivity('info', '项目资料库已恢复', profile.name); saveState(); return { ok: true };
   }
   if (route === '/api/collection/run') return runCollection(body.platform, { manual: Boolean(body.manual) });
   if (route === '/api/workflow/run') {
@@ -2192,7 +2192,7 @@ async function handleAction(route, body) {
     addActivity(body.status === 'approved' ? 'success' : 'info', body.status === 'approved' ? '图文审核通过' : body.status === 'pending' ? '图文已提交人工审核' : '图文已退回', item.title);
     saveState(); return { ok: true };
   }
-  if (route === '/api/variant/update') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; if (!['draft', 'pending', 'rejected'].includes(item.status)) return { ok: false, message: '当前状态不允许修改' }; if (['queued', 'running'].includes(item.imageJob?.status)) return { ok:false, code:'IMAGE_JOB_RUNNING', message:'图片任务正在运行。请等待完成、超时或停止总控后再修改页面，避免生成目标与编辑内容不一致' }; const title = safeText(body.title, 160); const content = safeText(body.body, 8000); const tags = normalizeTextList(body.tags, 12, 60); const imageReferencePolicy = ['auto', 'required', 'disabled'].includes(body.imageReferencePolicy) ? body.imageReferencePolicy : 'auto'; const policyChanged = (item.imageReferencePolicy || 'auto') !== imageReferencePolicy; if (Array.isArray(body.imagePages) && body.imagePages.some((page) => String(page?.imagePrompt ?? page?.prompt ?? '').length > 6000)) return { ok:false, message:'单页生图提示词不能超过6000个字符，请精简后保存' }; const imagePages = Array.isArray(body.imagePages) ? body.imagePages.map((page, index) => normalizeImagePage(page, index)).filter(Boolean).slice(0, 12) : []; if (!title || !content || imagePages.length < 2 || imagePages.some((page) => !page.imagePrompt)) return { ok: false, message: '标题、正文、至少2张图片和每页图片提示词不能为空' }; const oldPages = item.imagePages || []; const prior = new Map(oldPages.map((page) => [page.id, page])); let invalidated = 0; item.title = title; item.body = content; item.tags = tags; item.imageReferencePolicy = imageReferencePolicy; item.imagePages = imagePages.map((page) => { const before = prior.get(page.id); const unchanged = !policyChanged && before && before.copy === page.copy && before.imagePrompt === page.imagePrompt; if (before?.asset && !unchanged) invalidated += 1; return { ...page, asset: unchanged ? before.asset : null }; }); const retainedFiles = new Set(item.imagePages.map((page) => page.asset?.file).filter(Boolean)); const removedFiles = oldPages.map((page) => page.asset?.file).filter((file) => file && !retainedFiles.has(file)); item.pages = item.imagePages.map((page) => page.copy); item.status = 'draft'; item.imageStatus = item.imagePages.every((page) => page.asset?.file) ? 'ready' : 'draft'; if (policyChanged) item.imageJob = null; item.updatedAt = now(); addActivity('info', '一做工作台已保存', invalidated ? `${item.title} · ${invalidated}张图片因企业图片策略、提示词或上图文案变更而需要重做` : item.title); saveStateWithGeneratedImageCleanup(removedFiles); return { ok: true, invalidated, policyChanged }; }
+  if (route === '/api/variant/update') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; if (!['draft', 'pending', 'rejected'].includes(item.status)) return { ok: false, message: '当前状态不允许修改' }; if (['queued', 'running'].includes(item.imageJob?.status)) return { ok:false, code:'IMAGE_JOB_RUNNING', message:'图片任务正在运行。请等待完成、超时或停止总控后再修改页面，避免生成目标与编辑内容不一致' }; const title = safeText(body.title, 160); const content = safeText(body.body, 8000); const tags = normalizeTextList(body.tags, 12, 60); const imageReferencePolicy = ['auto', 'required', 'disabled'].includes(body.imageReferencePolicy) ? body.imageReferencePolicy : 'auto'; const policyChanged = (item.imageReferencePolicy || 'auto') !== imageReferencePolicy; if (Array.isArray(body.imagePages) && body.imagePages.some((page) => String(page?.imagePrompt ?? page?.prompt ?? '').length > 6000)) return { ok:false, message:'单页生图提示词不能超过6000个字符，请精简后保存' }; const imagePages = Array.isArray(body.imagePages) ? body.imagePages.map((page, index) => normalizeImagePage(page, index)).filter(Boolean).slice(0, 12) : []; if (!title || !content || imagePages.length < 2 || imagePages.some((page) => !page.imagePrompt)) return { ok: false, message: '标题、正文、至少2张图片和每页图片提示词不能为空' }; const oldPages = item.imagePages || []; const prior = new Map(oldPages.map((page) => [page.id, page])); let invalidated = 0; item.title = title; item.body = content; item.tags = tags; item.imageReferencePolicy = imageReferencePolicy; item.imagePages = imagePages.map((page) => { const before = prior.get(page.id); const unchanged = !policyChanged && before && before.copy === page.copy && before.imagePrompt === page.imagePrompt; if (before?.asset && !unchanged) invalidated += 1; return { ...page, asset: unchanged ? before.asset : null }; }); const retainedFiles = new Set(item.imagePages.map((page) => page.asset?.file).filter(Boolean)); const removedFiles = oldPages.map((page) => page.asset?.file).filter((file) => file && !retainedFiles.has(file)); item.pages = item.imagePages.map((page) => page.copy); item.status = 'draft'; item.imageStatus = item.imagePages.every((page) => page.asset?.file) ? 'ready' : 'draft'; if (policyChanged) item.imageJob = null; item.updatedAt = now(); addActivity('info', '一做工作台已保存', invalidated ? `${item.title} · ${invalidated}张图片因参考图策略、提示词或上图文案变更而需要重做` : item.title); saveStateWithGeneratedImageCleanup(removedFiles); return { ok: true, invalidated, policyChanged }; }
   if (route === '/api/variant/image/generate') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; if (!['draft', 'pending', 'rejected'].includes(item.status)) return { ok: false, message: '当前状态不允许生成或重做图片' }; return startVariantImageJob(item, normalizeTextList(body.pageIds, 20, 120), { force:Boolean(body.force) }); }
   if (route === '/api/variant/export-directory') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; const directory = safeText(body.directory, 2000); if (!directory || !path.isAbsolute(directory)) return { ok: false, message: '请填写本机绝对导出文件夹路径' }; try { fs.mkdirSync(directory, { recursive: true }); } catch (error) { return { ok: false, message: `无法使用导出文件夹：${error.message}` }; } item.exportDirectory = directory; item.updatedAt = now(); saveState(); return { ok: true, directory }; }
   if (route === '/api/variant/delete') { const id = safeText(body.id, 120); const item = state.variants.find((variant) => variant.id === id); if (!item) return { ok: false, message: '未找到图文版本' }; const family = [item, ...state.variants.filter((variant) => variant.parentVariantId === id)]; if (family.some(activeWorkflowReferencesVariant)) return { ok: false, message: '该版本仍属于进行中的工作流，暂时不能删除' }; if (family.some(protectedVariant)) return { ok: false, message: '该版本或其二做子版本已有审核、导出、发布或成功沉淀记录，不能删除' }; const result = deleteVariantRecords(family.map((variant) => variant.id)); addActivity('warning', '图文版本已删除', `${item.title} · 共清理${result.deleted}个未发布版本`); saveStateWithGeneratedImageCleanup(result.generatedFiles); return { ok: true, deleted:result.deleted }; }
@@ -2231,7 +2231,7 @@ async function handleAction(route, body) {
     const task = (async () => { const result = await withActiveCollector(createCreatorCenterCollector, (collector) => collector.probe()); const status = result.ok ? 'ready' : result.code === 'LOGIN_REQUIRED' ? 'needs_login' : result.code === 'CAPTCHA' ? 'verification_required' : 'warning'; setAgent('data-agent', { status, detail:result.message, errorCode:result.code || '', screenshot:'' }); addActivity(result.ok ? 'success' : 'warning', '重新检查 数据循环 Agent', result.message); saveState(); return result; })();
     collectionLocks.set('小红书后台', task); try { return await task; } finally { collectionLocks.delete('小红书后台'); }
   }
-  if (route === '/api/agent/restart') { const agent = state.agents.find((x) => x.id === body.id); if (!agent) return { ok: false, message: '未找到模块' }; if (agent.status === 'disabled') return { ok: false, message: '该模块尚未接入，不能伪装成已重启' }; if (agent.id === 'douyin-collector') { if (douyinBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'抖音专用浏览器正在执行另一项任务，暂时不能重新检查' }; agent.restarts++; const task=(async()=>{ try { const result = await withActiveCollector(createDouyinCollector, (collector) => collector.openLogin()); setAgent('douyin-collector', { status:'needs_login', detail:'抖音专用浏览器已打开；请完成登录或安全验证后，再按关键词测试采集', errorCode:'', screenshot:'' }); addActivity('info','重新检查 抖音抓取 Agent',result.message); saveState(); return result; } catch (error) { setAgent('douyin-collector',{ status:'warning', detail:error.message, errorCode:'BROWSER_START_FAILED' }); saveState(); return { ok:false, code:'BROWSER_START_FAILED', message:error.message }; } })(); collectionLocks.set('抖音登录',task); try { return await task; } finally { collectionLocks.delete('抖音登录'); } } if (['needs_login', 'verification_required'].includes(agent.status)) return { ok: false, message: '该状态需要人工登录或验证，主管不会自动绕过' }; agent.status = 'running'; agent.detail = '主管正在重新检查模块'; agent.restarts++; addActivity('warning', `检查 ${agent.name}`, '由值班主管执行'); saveState(); await sleep(450); agent.status = agent.id === 'xhs-collector' ? 'needs_login' : 'healthy'; agent.detail = agent.id === 'xhs-collector' ? '请通过“检查登录状态”快速确认，不必先跑完整采集' : '检查完成，心跳正常'; agent.lastHeartbeat = now(); saveState(); return { ok: true }; }
+  if (route === '/api/agent/restart') { const agent = state.agents.find((x) => x.id === body.id); if (!agent) return { ok: false, message: '未找到模块' }; if (agent.status === 'disabled') return { ok: false, message: '该模块尚未接入，不能伪装成已重启' }; if (agent.id === 'douyin-collector') { if (douyinBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'抖音专用浏览器正在执行另一项任务，暂时不能重新检查' }; agent.restarts++; const task=(async()=>{ try { const result = await withActiveCollector(createDouyinCollector, (collector) => collector.openLogin()); setAgent('douyin-collector', { status:'needs_login', detail:'抖音专用浏览器已打开；请完成登录或安全验证后，再按关键词测试采集', errorCode:'', screenshot:'' }); addActivity('info','重新检查 抖音抓取 Agent',result.message); saveState(); return result; } catch (error) { setAgent('douyin-collector',{ status:'warning', detail:error.message, errorCode:'BROWSER_START_FAILED' }); saveState(); return { ok:false, code:'BROWSER_START_FAILED', message:error.message }; } })(); collectionLocks.set('抖音登录',task); try { return await task; } finally { collectionLocks.delete('抖音登录'); } } if (['needs_login', 'verification_required'].includes(agent.status)) return { ok: false, message: '该状态需要人工登录或验证，系统不会自动绕过' }; agent.status = 'running'; agent.detail = '正在重新检查模块'; agent.restarts++; addActivity('warning', `检查 ${agent.name}`, '由运行监控执行'); saveState(); await sleep(450); agent.status = agent.id === 'xhs-collector' ? 'needs_login' : 'healthy'; agent.detail = agent.id === 'xhs-collector' ? '请通过“检查登录状态”快速确认，不必先跑完整采集' : '检查完成，心跳正常'; agent.lastHeartbeat = now(); saveState(); return { ok: true }; }
   if (route === '/api/settings/save') { const imageRules = normalizeImageRules(body); const requestedAutomation = Boolean(body.workflowAutoEnabled ?? body.collectionEnabled); const automationEnabled = state.settings.masterEnabled && requestedAutomation; const next = { collectionEnabled: automationEnabled, workflowAutoEnabled: automationEnabled, xhsEnabled: Boolean(body.xhsEnabled), douyinEnabled: Boolean(body.douyinEnabled), xhsKeywords: normalizeKeywords(body.xhsKeywords), douyinKeywords: normalizeKeywords(body.douyinKeywords), xhsMaxPerKeyword: finiteNumber(body.xhsMaxPerKeyword, state.settings.xhsMaxPerKeyword, 1, 500), xhsScrollRounds: finiteNumber(body.xhsScrollRounds, state.settings.xhsScrollRounds, 0, 12), xhsDelayMs: finiteNumber(body.xhsDelayMs, state.settings.xhsDelayMs, 1000, 30000), douyinDelayMs: finiteNumber(body.douyinDelayMs, state.settings.douyinDelayMs, 1500, 30000), autoMorningTime: normalizeClock(body.autoMorningTime, state.settings.autoMorningTime), autoAfternoonTime: normalizeClock(body.autoAfternoonTime, state.settings.autoAfternoonTime), manualRawLimit: finiteNumber(body.manualRawLimit, state.settings.manualRawLimit, 30, 50), automaticRawLimit: finiteNumber(body.automaticRawLimit, state.settings.automaticRawLimit, 50, 500), manualFinalLimit: finiteNumber(body.manualFinalLimit, state.settings.manualFinalLimit, 1, 10), automaticFinalLimit: finiteNumber(body.automaticFinalLimit, state.settings.automaticFinalLimit, 1, 10), dailyCandidateLimit: finiteNumber(body.dailyCandidateLimit, state.settings.dailyCandidateLimit, 1, 100000), aiAnalysisLimit: finiteNumber(body.aiAnalysisLimit, state.settings.aiAnalysisLimit, 1, 100000), analysisConcurrency: finiteNumber(body.analysisConcurrency, state.settings.analysisConcurrency, 1, 5), analysisAutoRetryCount: finiteNumber(body.analysisAutoRetryCount, state.settings.analysisAutoRetryCount, 0, 3), generationCount: finiteNumber(body.generationCount, state.settings.generationCount, 1, 20), scaleGenerationCount: finiteNumber(body.scaleGenerationCount, state.settings.scaleGenerationCount, 1, 20), performanceAutoEnabled: body.performanceAutoEnabled !== false, performanceSampleHours: normalizePerformanceSampleHours(body.performanceSampleHours), performanceAccountBaselineNotes: finiteNumber(body.performanceAccountBaselineNotes, state.settings.performanceAccountBaselineNotes, 3, 100), imageCount: imageRules.imageCount, imageAspectRatio: imageRules.aspectRatio, imageSize: imageRules.size, imageTextMode: imageRules.textMode, imageStyle: imageRules.style, imageSingleTimeoutSeconds: Math.round(imageRules.singleTimeoutMs / 1000), imageJobTimeoutMinutes: Math.round(imageRules.jobTimeoutMs / 60000), imageMaxConcurrentJobs: imageRules.maxConcurrentJobs, imageQualityReviewEnabled: imageRules.qualityReviewEnabled, imageQualityThreshold: imageRules.qualityThreshold, imageAutoRetryCount: imageRules.autoRetryCount, imagePipelineVersion: 3, brandColors: imageRules.brandColors, mustShow: imageRules.mustShow, prohibitedElements: imageRules.prohibitedElements, imageDailyBudget: finiteNumber(body.imageDailyBudget, state.settings.imageDailyBudget, 0, 1000000), imageCostPerImage: finiteNumber(body.imageCostPerImage, state.settings.imageCostPerImage, 0, 1000000), dailyBudget: finiteNumber(body.dailyBudget, state.settings.dailyBudget, 0, 1000000), visionDailyBudget: finiteNumber(body.visionDailyBudget, state.settings.visionDailyBudget, 0, 1000000), visionMaxImages: finiteNumber(body.visionMaxImages, state.settings.visionMaxImages, 1, 20), feishuWebhook: safeText(body.feishuWebhook, 2000) };
     next.imagePipelineVersion = 3;
     // 保留旧 API 的兼容入口：历史自动化或已部署的调用方仍可传单套连接；新页面不会再写这些字段。
@@ -2244,8 +2244,8 @@ async function handleAction(route, body) {
   if (route === '/api/vision/credential/save') { try { VISION_CREDENTIALS.save(body.apiKey); state.settings.visionCredentialConfigured = true; state.settings.lastVisionCheckOk = false; addActivity('success', '视觉模型凭据已安全保存', '视觉 Key 与文本 Key 分开加密保存'); saveState(); return { ok: true, message: '视觉 API Key 已由 Windows 加密保存' }; } catch (error) { return { ok: false, message: error.message }; } }
   if (route === '/api/vision/credential/clear') { VISION_CREDENTIALS.clear(); state.settings.visionCredentialConfigured = false; state.settings.lastVisionCheckOk = false; saveState(); return { ok: true }; }
   if (route === '/api/vision/test') { try { const prompt = '观察测试图片，只返回JSON：{"ok":true,"summary":"一句话描述图片"}'; const reservation = reserveCall('vision', prompt.length + 2000, 200, '视觉模型连接测试'); if (!reservation.ok) return reservation; const result = await callVisionJson({ baseUrl: activeConnection('vision').baseUrl, apiKey: activeConnection('vision').apiKey, model: activeConnection('vision').model, prompt, imageUrls: [VISION_TEST_IMAGE_URL], allowTrustedTestImage: true, timeoutMs: 60000, maxOutputTokens: 200 }); state.settings.lastVisionCheckAt = now(); state.settings.lastVisionCheckOk = Boolean(result.data?.ok); state.settings.visionCredentialConfigured = VISION_CREDENTIALS.has(); recordVisionUsage(result.usage, '视觉模型连接测试'); addActivity(state.settings.lastVisionCheckOk ? 'success' : 'warning', '视觉模型连接测试', state.settings.lastVisionCheckOk ? '视觉模型可以读取图片' : '视觉模型返回不符合预期'); saveState(); return { ok: state.settings.lastVisionCheckOk, message: state.settings.lastVisionCheckOk ? '视觉模型已联通并能读取图片' : '视觉模型返回不符合预期' }; } catch (error) { state.settings.lastVisionCheckAt = now(); state.settings.lastVisionCheckOk = false; addActivity('warning', '视觉模型连接失败', error.message); saveState(); return { ok: false, message: error.message }; } }
-  if (route === '/api/feishu/test') { const result = await sendFeishu('【图文爆款Agent】值班主管测试消息：系统当前运行正常。'); addActivity(result.ok ? 'success' : 'warning', '飞书联通测试', result.message); saveState(); return result; }
-  if (route === '/api/data/reset') { const generatedFiles = generatedImageFilesFromVariants(state.variants); const keepSettings = SELF_TEST ? null : structuredClone(state.settings); const keepEnterpriseProfiles = SELF_TEST ? [] : structuredClone(state.enterpriseProfiles || []); const keepActiveProfileId = SELF_TEST ? '' : state.activeEnterpriseProfileId; state = initialState(); if (keepSettings) { Object.assign(state.settings, keepSettings, { candidatesToday: 0, analysesToday: 0, generationsToday: 0, spentToday: 0, visionSpentToday: 0, usageDate: DAY() }); state.materials = []; state.enterpriseProfiles = keepEnterpriseProfiles; state.activeEnterpriseProfileId = keepActiveProfileId; } state.candidates = []; state.variants = []; state.publications = []; addActivity('info', '已清空本地业务数据', keepSettings ? '采集设置、企业素材库与专用浏览器登录资料均已保留' : '测试状态已恢复初始值'); saveStateWithGeneratedImageCleanup(generatedFiles); return { ok: true }; }
+  if (route === '/api/feishu/test') { const result = await sendFeishu('【图文内容增长 Agent】运行监控测试消息：系统当前运行正常。'); addActivity(result.ok ? 'success' : 'warning', '飞书联通测试', result.message); saveState(); return result; }
+  if (route === '/api/data/reset') { const generatedFiles = generatedImageFilesFromVariants(state.variants); const keepSettings = SELF_TEST ? null : structuredClone(state.settings); const keepEnterpriseProfiles = SELF_TEST ? [] : structuredClone(state.enterpriseProfiles || []); const keepActiveProfileId = SELF_TEST ? '' : state.activeEnterpriseProfileId; state = initialState(); if (keepSettings) { Object.assign(state.settings, keepSettings, { candidatesToday: 0, analysesToday: 0, generationsToday: 0, spentToday: 0, visionSpentToday: 0, usageDate: DAY() }); state.materials = []; state.enterpriseProfiles = keepEnterpriseProfiles; state.activeEnterpriseProfileId = keepActiveProfileId; } state.candidates = []; state.variants = []; state.publications = []; addActivity('info', '已清空本地数据', keepSettings ? '采集设置、项目资料库与专用浏览器登录资料均已保留' : '测试状态已恢复初始值'); saveStateWithGeneratedImageCleanup(generatedFiles); return { ok: true }; }
   return { ok: false, message: '未知操作' };
 }
 

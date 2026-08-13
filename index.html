@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="企业内部图文爆款增长 Agent 工作台">
+  <meta name="description" content="个人图文内容增长 Agent 工作台">
   <title>图文爆款Agent</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -23,10 +23,10 @@
         <button class="nav-item" data-view="produced" type="button"><span class="nav-icon">▤</span><span>已生产内容库</span><b id="producedNavCount">0</b></button>
         <button class="nav-item" data-view="review" type="button"><span class="nav-icon">✓</span><span>发布与数据</span><b id="reviewNavCount">0</b></button>
         <button class="nav-item" data-view="loop" type="button"><span class="nav-icon">↻</span><span>分析与二做</span></button>
-        <button class="nav-item" data-view="enterprise" type="button"><span class="nav-icon">▣</span><span>企业素材库</span></button>
+        <button class="nav-item" data-view="enterprise" type="button"><span class="nav-icon">▣</span><span>项目资料库</span></button>
         <button class="nav-item" data-view="materials" type="button"><span class="nav-icon">◇</span><span>成功素材库</span></button>
         <div class="nav-divider"></div>
-        <button class="nav-item" data-view="supervisor" type="button"><span class="nav-icon">♜</span><span>值班主管</span><i id="supervisorDot"></i></button>
+        <button class="nav-item" data-view="supervisor" type="button"><span class="nav-icon">♜</span><span>运行监控</span><i id="supervisorDot"></i></button>
         <button class="nav-item" data-view="settings" type="button"><span class="nav-icon">⚙</span><span>接入与设置</span></button>
       </nav>
 
@@ -145,7 +145,7 @@
 
       <section class="view" id="view-enterprise">
         <div class="page-intro">
-          <div><span class="section-kicker">ENTERPRISE SOURCE LIBRARY</span><h2>企业素材库</h2><p>人工维护品牌、产品、可信事实和禁用规则。后续“做”阶段只能依据这里的资料替换爆款母版内容。</p></div>
+          <div><span class="section-kicker">PROJECT SOURCE LIBRARY</span><h2>项目资料库</h2><p>人工维护产品、可信事实和禁用规则。后续“做”阶段只能依据这里的资料创作原创内容。</p></div>
           <div class="intro-actions"><button class="primary-button" id="addEnterpriseProfile" type="button">＋ 新建资料库</button></div>
         </div>
         <div class="enterprise-summary" id="enterpriseSummary"></div>
@@ -154,7 +154,7 @@
 
       <section class="view" id="view-supervisor">
         <div class="page-intro">
-          <div><span class="section-kicker">DUTY MANAGER</span><h2>值班主管 Agent</h2><p>谁趴窝就叫醒谁；自动处理不了，再带着原因、日志和建议通过飞书找人。</p></div>
+          <div><span class="section-kicker">RUNTIME MONITOR</span><h2>运行监控 Agent</h2><p>监控任务状态；自动处理不了时，记录原因、日志和建议，并通过飞书发送提醒。</p></div>
           <div class="intro-actions"><button class="secondary-button" id="testFeishuTop" type="button">飞书联通测试</button><button class="primary-button" id="inspectAll" type="button">执行全局巡检</button></div>
         </div>
         <div class="supervisor-banner">
@@ -164,8 +164,8 @@
         </div>
         <div class="agent-grid" id="agentGrid"></div>
         <div class="supervisor-bottom">
-          <article class="panel"><div class="panel-head"><div><span class="section-kicker">处理边界</span><h3>主管可以做什么</h3></div></div><div class="permission-list"><div><span class="allow">自动</span><p>读状态、查日志、重试任务、重启采集模块、暂停异常队列</p></div><div><span class="confirm">确认</span><p>修改采集频率、增加预算、更换账号、启动病毒式放大</p></div><div><span class="deny">禁止</span><p>绕过验证码、删除业务数据、擅自对外发布、关闭审计日志</p></div></div></article>
-          <article class="panel"><div class="panel-head"><div><span class="section-kicker">飞书接入</span><h3>直接和主管沟通</h3></div></div><p class="panel-copy">配置群机器人 Webhook 后，可接收故障、预算和每日运行报告。首版支持单向告警；双向命令需要后续配置飞书应用。</p><button class="secondary-button full" data-go="settings" type="button">前往配置飞书 →</button></article>
+          <article class="panel"><div class="panel-head"><div><span class="section-kicker">处理边界</span><h3>监控可以做什么</h3></div></div><div class="permission-list"><div><span class="allow">自动</span><p>读状态、查日志、重试任务、重启采集模块、暂停异常队列</p></div><div><span class="confirm">确认</span><p>修改采集频率、增加预算、更换账号、启动病毒式放大</p></div><div><span class="deny">禁止</span><p>绕过验证码、删除本地数据、擅自对外发布、关闭运行记录</p></div></div></article>
+          <article class="panel"><div class="panel-head"><div><span class="section-kicker">飞书接入</span><h3>接收运行提醒</h3></div></div><p class="panel-copy">配置飞书机器人 Webhook 后，可接收故障、预算和每日运行报告。首版支持单向提醒；双向命令需要后续配置飞书应用。</p><button class="secondary-button full" data-go="settings" type="button">前往配置飞书 →</button></article>
         </div>
       </section>
 
@@ -182,8 +182,8 @@
               <label class="toggle-field advanced-setting"><span><b>24小时自动工作流</b><small>自动执行所有已启用平台的抓取与AI预选，人工关卡处暂停</small></span><input name="workflowAutoEnabled" type="checkbox"><i></i></label>
               <label class="toggle-field"><span><b>小红书</b><small>独立启停，不影响抖音</small></span><input name="xhsEnabled" type="checkbox"><i></i></label>
               <label class="toggle-field advanced-setting"><span><b>抖音</b><small>低频搜索公开图文；仅图文入池，视频、验证码和私密内容会停止并提示人工处理</small></span><input name="douyinEnabled" type="checkbox"><i></i></label>
-              <label class="wide"><span>小红书关键词（每行一个）</span><textarea id="xhsKeywords" name="xhsKeywords" rows="5" placeholder="内容运营&#10;企业增长"></textarea></label>
-              <label class="wide advanced-setting"><span>抖音关键词（每行一个）</span><textarea id="douyinKeywords" name="douyinKeywords" rows="5" placeholder="内容运营&#10;企业增长"></textarea></label>
+              <label class="wide"><span>小红书关键词（每行一个）</span><textarea id="xhsKeywords" name="xhsKeywords" rows="5" placeholder="内容运营&#10;图文增长"></textarea></label>
+              <label class="wide advanced-setting"><span>抖音关键词（每行一个）</span><textarea id="douyinKeywords" name="douyinKeywords" rows="5" placeholder="内容运营&#10;图文增长"></textarea></label>
               <label class="advanced-setting"><span>手动每个平台原始抓取量</span><input name="manualRawLimit" type="number" min="30" max="50"></label>
               <label class="advanced-setting"><span>手动最终候选</span><input name="manualFinalLimit" type="number" min="1" max="10"></label>
               <label class="advanced-setting"><span>自动每轮每个平台原始抓取量</span><input name="automaticRawLimit" type="number" min="50" max="500"></label>
@@ -227,7 +227,7 @@
             </div>
           </article>
           <article class="settings-card advanced-setting">
-            <div><span class="settings-icon">做</span><h3>一做图片规则</h3><p>这是生图前的硬约束：文本模型只能依照这里写每页提示词，生图模型再按提示词执行。规则与企业素材库会共同进入生产。</p></div>
+            <div><span class="settings-icon">做</span><h3>一做图片规则</h3><p>这是生图前的硬约束：文本模型只能依照这里写每页提示词，生图模型再按提示词执行。规则与项目资料库会共同进入创作。</p></div>
             <div class="field-grid">
               <label><span>每套图片张数</span><input name="imageCount" type="number" min="2" max="12"></label>
               <label><span>实际输出画布</span><select name="imageAspectRatio"><option value="2:3">2:3 竖图（1024×1536，推荐）</option><option value="1:1">1:1 方图（1024×1024）</option><option value="3:2">3:2 横图（1536×1024）</option></select><small>这里显示供应商实际返回尺寸；视觉质检会按同一画布判断，不再把 2:3 误判为 3:4 或 9:16。</small></label>
@@ -240,7 +240,7 @@
               <label><span>质检后自动重做次数</span><input name="imageAutoRetryCount" type="number" min="0" max="2"></label>
               <label class="toggle-field"><span><b>启用视觉质检</b><small>生成后用视觉模型检查是否符合页面任务；失败可标记人工重做</small></span><input name="imageQualityReviewEnabled" type="checkbox"><i></i></label>
               <label class="wide"><span>品牌色（每行一条）</span><textarea name="brandColors" rows="3" placeholder="例如：品牌蓝 #1D5DB8"></textarea></label>
-              <label class="wide"><span>必须出现的内容（每行一条）</span><textarea name="mustShow" rows="3" placeholder="例如：产品包装、品牌吉祥物；未填写则由企业素材库与每页提示词决定"></textarea></label>
+              <label class="wide"><span>必须出现的内容（每行一条）</span><textarea name="mustShow" rows="3" placeholder="例如：产品包装、品牌吉祥物；未填写则由项目资料库与每页提示词决定"></textarea></label>
               <label class="wide"><span>禁止出现的元素（每行一条）</span><textarea name="prohibitedElements" rows="3" placeholder="例如：竞品 Logo、夸张疗效、人物肖像、二维码"></textarea></label>
             </div>
           </article>
@@ -254,7 +254,7 @@
             </div>
           </article>
           <article class="settings-card advanced-setting">
-            <div><span class="settings-icon">飞</span><h3>飞书告警</h3><p>连接企业群机器人，异常时由主管主动找人。</p></div>
+            <div><span class="settings-icon">飞</span><h3>飞书提醒</h3><p>连接飞书机器人，在发生异常时发送提醒。</p></div>
             <div class="field-grid"><label class="wide"><span>飞书机器人 Webhook</span><input name="feishuWebhook" type="url" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."></label><div class="form-action-row wide"><button class="secondary-button" id="testFeishu" type="button">发送测试消息</button></div></div>
           </article>
           <div class="settings-actions"><button class="danger-text-button advanced-setting" id="resetDemo" type="button">清空本地业务数据</button><button class="primary-button" type="submit">保存设置</button></div>
@@ -298,29 +298,29 @@
   <div class="modal-layer" id="enterpriseModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="enterpriseModalTitle">
     <div class="modal-card">
       <button class="modal-close" data-close="enterpriseModal" type="button">×</button>
-      <span class="section-kicker">PRODUCTION INPUT</span><h2 id="enterpriseModalTitle">新建企业素材库</h2><p>一行一条的内容会成为后续 AI 生产时的明确依据和限制。</p>
+      <span class="section-kicker">PROJECT INPUT</span><h2 id="enterpriseModalTitle">新建项目资料库</h2><p>一行一条的内容会成为后续 AI 创作时的明确依据和限制。</p>
       <form id="enterpriseForm" class="modal-form two-column enterprise-form">
         <input name="id" type="hidden">
         <label><span>资料库名称</span><input name="name" type="text" required placeholder="例如：食品安全产品线"></label>
         <label><span>行业/品类</span><input name="category" type="text" placeholder="例如：食品检测服务"></label>
-        <label><span>品牌名称</span><input name="brandName" type="text" placeholder="企业品牌"></label>
+        <label><span>品牌名称</span><input name="brandName" type="text" placeholder="项目或品牌名称"></label>
         <label><span>产品/服务名称</span><input name="productName" type="text" placeholder="具体产品或服务"></label>
         <label class="wide"><span>品牌定位</span><textarea name="positioning" rows="3" placeholder="我们是谁、解决什么问题、与竞品有什么区别"></textarea></label>
         <label class="wide"><span>目标人群</span><textarea name="audience" rows="3" placeholder="面向谁、典型痛点、使用场景"></textarea></label>
         <label class="wide"><span>品牌语气/账号人设</span><textarea name="brandVoice" rows="3" placeholder="例如：专业但不吓人，引用事实，避免高高在上"></textarea></label>
         <label class="wide"><span>产品事实（每行一条）</span><textarea name="productFacts" rows="5" placeholder="只能填写可确认的真实信息，例如功能、规格、适用范围"></textarea></label>
         <label class="wide"><span>核心卖点（每行一条）</span><textarea name="sellingPoints" rows="4" placeholder="希望内容重点表达的价值"></textarea></label>
-        <label class="wide"><span>证据与资质（每行一条）</span><textarea name="proofPoints" rows="4" placeholder="检测报告、认证、数据出处、客户授权案例等"></textarea></label>
+        <label class="wide"><span>证据与资质（每行一条）</span><textarea name="proofPoints" rows="4" placeholder="检测报告、认证、公开数据出处或已授权案例等"></textarea></label>
         <label class="wide"><span>禁止宣传/红线（每行一条）</span><textarea name="forbiddenClaims" rows="4" placeholder="不可使用的词、不可承诺的效果、法律和品牌红线"></textarea></label>
         <label class="wide"><span>视觉要求（每行一条）</span><textarea name="visualRules" rows="4" placeholder="Logo、品牌色、产品外观、图片风格等；会与设置页的一做图片规则共同约束生图"></textarea></label>
         <section class="enterprise-images wide" aria-labelledby="enterpriseImagesTitle">
-          <div class="enterprise-images-head"><div><span>企业图片资产（可选）</span><b id="enterpriseImagesTitle">产品、场景与品牌参考图</b><small>图片保存在本机；填写图片说明后才会进入一做的企业约束。未填写说明的图片仍会归档，方便后续补充。</small></div><button class="secondary-button" id="addEnterpriseImage" type="button">＋ 添加图片</button></div>
+          <div class="enterprise-images-head"><div><span>参考图片（可选）</span><b id="enterpriseImagesTitle">产品、场景与品牌参考图</b><small>图片保存在本机；填写图片说明后才会进入一做的创作约束。未填写说明的图片仍会归档，方便后续补充。</small></div><button class="secondary-button" id="addEnterpriseImage" type="button">＋ 添加图片</button></div>
           <div class="enterprise-image-list" id="enterpriseImageList"></div>
         </section>
-        <label class="wide"><span>参考资料链接（每行一条）</span><textarea name="referenceLinks" rows="3" placeholder="产品页、公开报告或内部可访问资料链接"></textarea></label>
+        <label class="wide"><span>参考资料链接（每行一条）</span><textarea name="referenceLinks" rows="3" placeholder="产品页、公开报告或自己可访问的资料链接"></textarea></label>
         <label class="wide"><span>补充说明</span><textarea name="notes" rows="3"></textarea></label>
         <label class="toggle-field wide"><span><b>保存后设为当前生产资料库</b><small>后续将允许每次生产单独选择；当前先设置一个默认库</small></span><input name="makeActive" type="checkbox" checked><i></i></label>
-        <button class="primary-button full wide" type="submit">保存企业素材库</button>
+        <button class="primary-button full wide" type="submit">保存项目资料库</button>
       </form>
     </div>
   </div>
@@ -328,12 +328,12 @@
   <div class="modal-layer" id="enterpriseImageModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="enterpriseImageModalTitle">
     <div class="modal-card small-modal">
       <button class="modal-close" data-close="enterpriseImageModal" type="button">×</button>
-      <span class="section-kicker">LOCAL ENTERPRISE ASSET</span><h2 id="enterpriseImageModalTitle">添加企业图片</h2><p>不上传到第三方；保存到当前 Windows 用户的本机业务目录。图片说明可后补：只有填写说明的图片才会被 AI 当作生产约束。</p>
+      <span class="section-kicker">LOCAL REFERENCE IMAGE</span><h2 id="enterpriseImageModalTitle">添加参考图片</h2><p>不上传到第三方；保存到当前 Windows 用户的本机项目目录。图片说明可后补：只有填写说明的图片才会被 AI 当作创作约束。</p>
       <form id="enterpriseImageForm" class="modal-form">
         <label><span>图片文件</span><input name="file" type="file" accept="image/jpeg,image/png,image/webp" required></label>
         <label><span>用途分类</span><select name="kind"><option value="product">产品实拍</option><option value="scene">使用/业务场景</option><option value="brand">品牌视觉</option><option value="reference">构图/风格参考</option></select></label>
         <label><span>素材名称（可选）</span><input name="name" type="text" maxlength="160" placeholder="例如：产品正面包装图"></label>
-        <label><span>图片中有什么/可用于什么（可选）</span><textarea name="description" rows="4" maxlength="1200" placeholder="填写后会成为 AI 的企业约束；例如：白色包装盒正面，左上有品牌标识"></textarea></label>
+        <label><span>图片中有什么/可用于什么（可选）</span><textarea name="description" rows="4" maxlength="1200" placeholder="填写后会成为 AI 的创作约束；例如：白色包装盒正面，左上有品牌标识"></textarea></label>
         <label><span>不可改动或限制说明（可选）</span><textarea name="immutableNotes" rows="3" maxlength="800" placeholder="例如：不可虚构认证标识；不可替换包装上的文字"></textarea></label>
         <button class="primary-button full" type="submit">保存图片素材</button>
       </form>
@@ -343,10 +343,10 @@
   <div class="modal-layer" id="enterpriseExportModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="enterpriseExportModalTitle">
     <div class="modal-card small-modal">
       <button class="modal-close" data-close="enterpriseExportModal" type="button">×</button>
-      <span class="section-kicker">PORTABLE LIBRARY SNAPSHOT</span><h2 id="enterpriseExportModalTitle">导出企业素材库</h2><p id="enterpriseExportHint">导出文字资料、图片原文件、图片说明与清单。导出是只读快照，不会修改当前资料库。</p>
+      <span class="section-kicker">PORTABLE LIBRARY SNAPSHOT</span><h2 id="enterpriseExportModalTitle">导出项目资料库</h2><p id="enterpriseExportHint">导出文字资料、图片原文件、图片说明与清单。导出是只读快照，不会修改当前资料库。</p>
       <form id="enterpriseExportForm" class="modal-form">
         <input name="profileId" type="hidden">
-        <label><span>指定导出文件夹</span><input name="directory" type="text" required placeholder="例如 D:\企业资料库备份"></label>
+        <label><span>指定导出文件夹</span><input name="directory" type="text" required placeholder="例如 D:\项目资料库备份"></label>
         <small>系统会在该文件夹内新建一个带时间的资料库快照目录；不会覆盖旧导出包。</small>
         <button class="primary-button full" type="submit">导出完整资料库</button>
       </form>

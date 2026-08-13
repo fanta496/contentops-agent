@@ -229,7 +229,7 @@ button:disabled { opacity: .52; cursor: not-allowed; transform: none !important;
   .launch-panel,.target-panel,.workflow-section,.human-queue,.current-run,.activity-section { padding:16px; }.run-summary { grid-template-columns:1fr; }.credential-row { align-items:flex-start; flex-direction:column; }.credential-row > div { width:100%; flex-direction:column; }.credential-row button { width:100%; }
 }
 
-/* 可读性下限：企业工作台不使用低于 11px 的可见正文，关键操作不低于 12px。 */
+/* 可读性下限：内容工作台不使用低于 11px 的可见正文，关键操作不低于 12px。 */
 .breadcrumb,.section-kicker,.banner-label,.core small,.kpi-card small,.live-label,.sidebar-foot p { font-size: 11px; }
 .brand small,.machine-status small,.mode-pill,.text-button,.link-button,.danger-text-button,.master-control span,.master-control p,.command-banner p,.kpi-card p,.section-title-row p,.page-intro p,.pipeline-step b,.pipeline-step small,.priority-item p,.activity-item p,.activity-item time,.agent-card p,.agent-card footer,.agent-card footer button,.agent-state,.permission-list span,.permission-list p,.panel-copy,.settings-card > div > p,.field-grid label > span,.modal-form label > span,.toggle-field b,.toggle-field small,.model-profile-note,.model-profile-empty,.model-profile header em,.model-profile p,.profile-status,.profile-error,.modal-card > p,.copy-block h4,.copy-block p,.page-card,.editor-field > span,.integration-field b,.integration-field small,.integration-field em,.collector-status-card span,.collector-status-card p,.toast strong,.toast small { font-size: 11px; }
 .primary-button,.secondary-button,.light-button,.danger-stop-button,.field-grid input:not([type="checkbox"]),.field-grid textarea,.modal-form input,.modal-form select,.editor-field input,.editor-field textarea { font-size: 12px; }

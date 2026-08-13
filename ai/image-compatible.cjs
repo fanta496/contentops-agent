@@ -91,7 +91,7 @@ async function generateImage({ baseUrl, apiKey, model, prompt, size = '', timeou
   let body; const headers = { authorization: `Bearer ${apiKey}` };
   if (normalizedMode === 'reference_edit') {
     const references = Array.isArray(referenceImages) ? referenceImages.filter((item) => item?.bytes?.length && item?.mime) : [];
-    if (!references.length) throw new Error('当前生图档案要求企业参考图，但本套内容没有可用的企业图片素材');
+    if (!references.length) throw new Error('当前生图档案要求参考图，但本套内容没有可用的参考图片');
     body = new FormData(); body.set('model', model); body.set('prompt', text); body.set('n', '1'); body.set('response_format', 'b64_json');
     if (String(size || '').trim()) body.set('size', String(size).trim());
     for (const [index, reference] of references.slice(0, 4).entries()) body.append('image', new Blob([reference.bytes], { type:reference.mime }), reference.name || `reference-${index + 1}.png`);
@@ -99,7 +99,7 @@ async function generateImage({ baseUrl, apiKey, model, prompt, size = '', timeou
     body = { model, prompt:text, n:1, response_format:'b64_json' };
     if (normalizedMode === 'reference_generation_json') {
       const references = Array.isArray(referenceImages) ? referenceImages.filter((item) => item?.bytes?.length && item?.mime) : [];
-      if (!references.length) throw new Error('当前生图档案要求企业参考图，但本套内容没有可用的企业图片素材');
+      if (!references.length) throw new Error('当前生图档案要求参考图，但本套内容没有可用的参考图片');
       body.image = references.slice(0, 4).map((reference) => `data:${reference.mime};base64,${Buffer.from(reference.bytes).toString('base64')}`);
       // GPT Image generations 参考图兼容格式使用 JSON image 数组，不使用 multipart。
       delete body.response_format;

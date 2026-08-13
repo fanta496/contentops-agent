@@ -5,6 +5,7 @@ server.lock.json
 runtime-config.json
 generated-images/
 enterprise-assets/
+project-assets/
 collector-errors/
 profiles/
 browser-profiles/
@@ -36,6 +37,15 @@ checksums/
 *.zip
 *.exe
 launcher/bin/
+
+# Local-only notes and regression fixtures; keep these out of the public source snapshot.
+docs/
+qa/
+BUILDING.md
+CONTRIBUTING.md
+SECURITY.md
+THIRD_PARTY_NOTICES.md
+OPEN_SOURCE_RELEASE_CHECKLIST.md
 
 # Delivery-only files, unrelated notes, and generated package manifests
 README.txt
