@@ -1,0 +1,53 @@
+# Local runtime state and credentials
+state.json
+state.backup.json
+server.lock.json
+runtime-config.json
+generated-images/
+enterprise-assets/
+collector-errors/
+profiles/
+browser-profiles/
+
+# Local secrets and environment files
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.cookie
+
+# QA runtime output and browser profiles
+qa/tmp/
+qa/.collector-detail-profile-*/
+qa/.douyin-fixture-profile-*/
+qa/audit-selftest.err
+qa/audit-selftest.out
+qa/architecture-desktop.png
+qa/start-mobile.png
+qa/workflow-desktop.png
+qa/workflow-mobile.png
+
+# The bundled release is kept on the USB/release folder for delivery, but is
+# better uploaded to a GitHub Release instead of committed to source history.
+release/
+build-artifacts/
+checksums/
+*.zip
+*.exe
+launcher/bin/
+
+# Delivery-only files, unrelated notes, and generated package manifests
+README.txt
+MANIFEST.txt
+github推荐.txt
+start-agent.ps1
+关闭图文爆款Agent.ps1
+启动图文爆款Agent.bat
+关闭图文爆款Agent.bat
+
+# Operating-system/editor noise
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

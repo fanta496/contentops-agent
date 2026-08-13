@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="企业内部图文爆款增长 Agent 工作台">
+  <title>图文爆款Agent</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">CP</span>
+        <div><strong>ContentOps</strong><small>图文爆款 Agent</small></div>
+      </div>
+
+      <nav class="side-nav" aria-label="工作台导航">
+        <button class="nav-item active" data-view="dashboard" type="button"><span class="nav-icon">⌂</span><span>总控台</span></button>
+        <button class="nav-item" data-view="runs" type="button"><span class="nav-icon">≡</span><span>任务记录</span></button>
+        <button class="nav-item" data-view="radar" type="button"><span class="nav-icon">◎</span><span>候选与选款</span><b id="candidateNavCount">0</b></button>
+        <button class="nav-item" data-view="creation" type="button"><span class="nav-icon">✦</span><span>图文生产</span></button>
+        <button class="nav-item" data-view="produced" type="button"><span class="nav-icon">▤</span><span>已生产内容库</span><b id="producedNavCount">0</b></button>
+        <button class="nav-item" data-view="review" type="button"><span class="nav-icon">✓</span><span>发布与数据</span><b id="reviewNavCount">0</b></button>
+        <button class="nav-item" data-view="loop" type="button"><span class="nav-icon">↻</span><span>分析与二做</span></button>
+        <button class="nav-item" data-view="enterprise" type="button"><span class="nav-icon">▣</span><span>企业素材库</span></button>
+        <button class="nav-item" data-view="materials" type="button"><span class="nav-icon">◇</span><span>成功素材库</span></button>
+        <div class="nav-divider"></div>
+        <button class="nav-item" data-view="supervisor" type="button"><span class="nav-icon">♜</span><span>值班主管</span><i id="supervisorDot"></i></button>
+        <button class="nav-item" data-view="settings" type="button"><span class="nav-icon">⚙</span><span>接入与设置</span></button>
+      </nav>
+
+      <div class="sidebar-foot" aria-live="polite">
+        <div class="machine-status">
+          <span class="pulse-dot"></span>
+          <div><strong>后台运行中</strong><small id="lastSaved">数据刚刚保存</small></div>
+        </div>
+        <p>服务在线不等于工作流正在运行</p>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="breadcrumb">图文爆款 Agent / <span id="breadcrumb">总控台</span></p>
+          <h1 id="pageTitle">内容工作流控制台</h1>
+        </div>
+        <div class="top-actions">
+          <div class="mode-pill" title="真实能力状态"><span></span><b id="readinessPill">正在检查接入</b></div>
+          <button class="icon-button" id="refreshState" type="button" title="刷新">↻</button>
+          <button class="primary-button" id="quickCollect" type="button"><span>▶</span>运行完整工作流</button>
+        </div>
+      </header>
+
+      <section class="view active" id="view-dashboard">
+        <section class="master-control" id="masterControl"><div><span>人工总控</span><h2 id="masterControlTitle">系统已停止</h2><p id="masterControlDetail">配置并验证文本与视觉模型后，由人工明确开始。停止可在工作流任何阶段执行。</p></div><div><button class="danger-stop-button" id="masterStop" type="button">■ 立即停止</button><button class="primary-button" id="masterStart" type="button">▶ 开始总控</button></div></section>
+        <section class="quick-start-guide" id="quickStartGuide">
+          <div class="quick-start-copy"><span class="section-kicker">QUICK START</span><h2>新同事从这里开始</h2><p>先跑通“小红书抓取＋AI分析”，生产资料和生图模型可以后补，不需要一次填完全部设置。</p></div>
+          <div class="quick-start-main"><div class="quick-start-steps" id="quickStartSteps"></div><div class="quick-start-actions"><strong id="quickStartTitle">正在检查下一步</strong><p id="quickStartDetail">系统会只给出当前必须完成的一件事。</p><div><button class="secondary-button" id="quickStartSecondary" type="button" hidden></button><button class="primary-button" id="quickStartPrimary" type="button">检查接入状态</button></div></div></div>
+        </section>
+        <div class="readiness-strip" id="readinessStrip"></div>
+        <div class="control-grid">
+          <section class="launch-panel">
+            <div class="panel-title"><div><h2>如何运行</h2><p>手动和24小时模式共用同一套抓取目标与人工闸门。</p></div><span id="workflowStateBadge" class="state-badge">未运行</span></div>
+            <div class="launch-modes">
+              <article class="launch-mode primary-mode"><h3>立即运行一次</h3><p>依次执行抓取与AI预选，到人工选款处安全暂停。</p><button class="primary-button large" id="startWorkflow" type="button">检查并开始完整工作流</button><button class="secondary-button" id="collectOnly" type="button">仅运行抓取</button></article>
+              <article class="launch-mode"><div class="mode-heading"><h3>24小时自动运行</h3><label class="switch"><input id="autoWorkflowToggle" type="checkbox"><i></i></label></div><p>自动处理所有已启用平台的抓取与AI预选；绝不跨过人工选款、发布和二做确认。</p><dl class="schedule-summary"><div><dt>运行间隔</dt><dd id="autoInterval">--</dd></div><div><dt>下次运行</dt><dd id="nextRunAt">--</dd></div></dl><button class="secondary-button" id="saveAutoMode" type="button">保存自动运行状态</button></article>
+            </div>
+          </section>
+          <aside class="target-panel"><div class="panel-title"><div><h2>本次抓什么</h2><p id="targetSummary">正在读取抓取目标…</p></div><button class="link-button" data-go="settings" type="button">编辑目标</button></div><div id="targetDetails" class="target-details"></div><div class="agent-tool-note"><strong>抓取 Agent</strong><span>决定何时抓、抓什么、如何去重和暂停</span><i>调用</i><strong>专用 Chrome 采集器</strong><span>实际搜索并读取公开页面</span></div></aside>
+        </div>
+        <section class="workflow-section"><div class="panel-title"><div><h2>完整工作流</h2><p>蓝色由Agent执行，黄色等待人工，灰色尚未开始或未配置。</p></div><span id="pipelineSummary">暂无运行</span></div><div class="workflow-track" id="pipeline"></div></section>
+        <div class="operations-grid"><section class="human-queue"><div class="panel-title"><div><h2>等待我处理</h2><p>所有人工关卡和阻塞问题集中在这里。</p></div></div><div id="priorityList" class="action-queue"></div></section><section class="current-run"><div class="panel-title"><div><h2>当前 / 最近运行</h2><p>区分人工触发、定时触发和实际成本。</p></div><div class="panel-actions"><button class="secondary-button compact" id="resumeWorkflow" type="button">继续受阻任务</button><button class="link-button" data-go="runs" type="button">全部记录</button></div></div><div id="currentRunPanel"></div></section></div>
+        <section class="activity-section"><div class="panel-title"><div><h2>实时日志</h2><p>只显示真实执行和状态变化。</p></div><span class="live-label"><i></i>实时</span></div><div id="activityFeed" class="activity-feed"></div></section>
+      </section>
+
+      <section class="view" id="view-runs"><div class="page-intro"><div><h2>任务记录</h2><p>每一轮人工或定时工作流的配置快照、阶段结果、成本和阻塞原因。</p></div><div class="intro-actions"><button class="secondary-button danger-outline" id="cleanupRuns" type="button">清理已结束记录</button></div></div><div class="run-table" id="runTable"></div></section>
+
+      <section class="view" id="view-radar">
+        <div class="page-intro">
+          <div><span class="section-kicker">24H TREND RADAR</span><h2>爆款候选池</h2><p>系统先用公开数据和增长速度筛选，再把高潜内容交给你确认。</p></div>
+          <div class="intro-actions"><button class="secondary-button danger-outline" id="cleanupCandidates" type="button">清理已忽略</button><button class="secondary-button" id="addSourceButton" type="button">＋ 补充链接</button><button class="secondary-button" id="scanDouyinButton" type="button">◎ 采集抖音图文</button><button class="primary-button" id="scanBothButton" type="button">◎ 采集已启用平台</button></div>
+        </div>
+        <div class="notice-card"><span>i</span><p><strong>小红书已投入使用；抖音1.3正在做真实页面适配</strong>：两者均使用独立 Chrome 登录资料；遇到登录失效或安全验证会立即暂停，不会绕过验证码。抖音只允许图文入池；24小时模式会处理所有已启用平台，抖音完成真人压力验收前请保持自动模式关闭。</p></div>
+        <div class="toolbar">
+          <div class="segmented" id="platformFilter"><button class="active" data-filter="全部" type="button">全部</button><button data-filter="小红书" type="button">小红书</button><button data-filter="抖音" type="button">抖音</button></div>
+          <div class="toolbar-right"><label class="search-box"><span>⌕</span><input id="candidateSearch" type="search" placeholder="搜索标题、作者或标签"></label><select id="candidateSort"><option value="score">按爆款分</option><option value="growth">按增长速度</option><option value="newest">按发现时间</option></select></div>
+        </div>
+        <div class="radar-layout">
+          <div class="candidate-list" id="candidateList"></div>
+          <aside class="candidate-inspector" id="candidateInspector"></aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-creation">
+        <div class="page-intro">
+          <div><span class="section-kicker">AI CONTENT STUDIO</span><h2>待生产队列</h2><p>只处理已选款但尚未产出内容的方向，以及可以继续重试的一做任务。</p></div>
+        </div>
+        <div class="studio-summary" id="studioSummary"></div>
+        <div class="variant-board" id="variantBoard"></div>
+      </section>
+
+      <section class="view" id="view-produced">
+        <div class="page-intro">
+          <div><span class="section-kicker">PRODUCED CONTENT LIBRARY</span><h2>已生产内容库</h2><p>所有一做与二做产出集中保存，可继续编辑、审核、导出和追溯来源。</p></div>
+          <div class="intro-actions"><button class="secondary-button danger-outline" id="cleanupVariants" type="button">清理待审/退回</button></div>
+        </div>
+        <div class="studio-summary" id="producedSummary"></div>
+        <div class="toolbar">
+          <div class="segmented" id="producedFilter"><button class="active" data-filter="all" type="button">全部</button><button data-filter="draft" type="button">制作中</button><button data-filter="pending" type="button">待审核</button><button data-filter="approved" type="button">已通过</button><button data-filter="exported" type="button">已导出</button><button data-filter="published" type="button">已发布</button><button data-filter="scaled" type="button">二做版本</button></div>
+          <div class="toolbar-right"><label class="search-box"><span>⌕</span><input id="producedSearch" type="search" placeholder="搜索标题、正文或标签"></label></div>
+        </div>
+        <div class="variant-board" id="producedBoard"></div>
+      </section>
+
+      <section class="view" id="view-review">
+        <div class="page-intro">
+          <div><span class="section-kicker">HUMAN GATE</span><h2>审核与发布</h2><p>机器负责生成，人负责事实、品牌、原创度和最终发布决定。</p></div>
+        </div>
+        <div class="review-stats" id="reviewStats"></div>
+        <div class="review-list" id="reviewList"></div>
+      </section>
+
+      <section class="view" id="view-loop">
+        <div class="page-intro">
+          <div><span class="section-kicker">DATA FLYWHEEL</span><h2>二次分析与放大</h2><p>登记发布后，系统从小红书创作后台保存真实数据快照，再由 AI 判断是否值得二做。</p></div>
+          <div class="intro-actions"><button class="secondary-button" id="openCreatorLogin" type="button">打开创作后台登录</button><button class="primary-button" id="collectPerformanceNow" type="button">读取后台数据</button></div>
+        </div>
+        <div class="loop-steps">
+          <div><span>01</span><b>发布图文</b><small>人工/后续自动发布</small></div><i>→</i>
+          <div><span>02</span><b>后台采样</b><small>2h / 24h / 72h 快照</small></div><i>→</i>
+          <div><span>03</span><b>二次分析</b><small>内容、数据与账号基线</small></div><i>→</i>
+          <div><span>04</span><b>人工确认放大</b><small>再生成受控变体</small></div>
+        </div>
+        <div class="loop-grid" id="loopGrid"></div>
+      </section>
+
+      <section class="view" id="view-materials">
+        <div class="page-intro">
+          <div><span class="section-kicker">WINNING LIBRARY</span><h2>成功素材库</h2><p>素材库从第一条内容开始自动生长，保存的是可验证的钩子、结构、首图和胜出内容。</p></div>
+        </div>
+        <div class="library-hero"><div><span>自动沉淀</span><h3>不是先建完素材库再生产<br>而是在每一次胜出后，让素材库变聪明</h3></div><div class="library-score"><b id="materialCount">0</b><small>个可复用资产</small></div></div>
+        <div class="material-grid" id="materialGrid"></div>
+      </section>
+
+      <section class="view" id="view-enterprise">
+        <div class="page-intro">
+          <div><span class="section-kicker">ENTERPRISE SOURCE LIBRARY</span><h2>企业素材库</h2><p>人工维护品牌、产品、可信事实和禁用规则。后续“做”阶段只能依据这里的资料替换爆款母版内容。</p></div>
+          <div class="intro-actions"><button class="primary-button" id="addEnterpriseProfile" type="button">＋ 新建资料库</button></div>
+        </div>
+        <div class="enterprise-summary" id="enterpriseSummary"></div>
+        <div class="enterprise-grid" id="enterpriseGrid"></div>
+      </section>
+
+      <section class="view" id="view-supervisor">
+        <div class="page-intro">
+          <div><span class="section-kicker">DUTY MANAGER</span><h2>值班主管 Agent</h2><p>谁趴窝就叫醒谁；自动处理不了，再带着原因、日志和建议通过飞书找人。</p></div>
+          <div class="intro-actions"><button class="secondary-button" id="testFeishuTop" type="button">飞书联通测试</button><button class="primary-button" id="inspectAll" type="button">执行全局巡检</button></div>
+        </div>
+        <div class="supervisor-banner">
+          <div class="supervisor-avatar">♜</div>
+          <div><span class="status-line"><i></i>值班中</span><h3>所有模块都在我的视线内</h3><p>普通故障自动重试和唤醒；登录失效、验证码、预算调整和危险操作必须找人确认。</p></div>
+          <div class="supervisor-numbers"><div><b id="healthyCount">0</b><small>健康模块</small></div><div><b id="warningCount">0</b><small>待处理</small></div><div><b id="restartCount">0</b><small>累计唤醒</small></div></div>
+        </div>
+        <div class="agent-grid" id="agentGrid"></div>
+        <div class="supervisor-bottom">
+          <article class="panel"><div class="panel-head"><div><span class="section-kicker">处理边界</span><h3>主管可以做什么</h3></div></div><div class="permission-list"><div><span class="allow">自动</span><p>读状态、查日志、重试任务、重启采集模块、暂停异常队列</p></div><div><span class="confirm">确认</span><p>修改采集频率、增加预算、更换账号、启动病毒式放大</p></div><div><span class="deny">禁止</span><p>绕过验证码、删除业务数据、擅自对外发布、关闭审计日志</p></div></div></article>
+          <article class="panel"><div class="panel-head"><div><span class="section-kicker">飞书接入</span><h3>直接和主管沟通</h3></div></div><p class="panel-copy">配置群机器人 Webhook 后，可接收故障、预算和每日运行报告。首版支持单向告警；双向命令需要后续配置飞书应用。</p><button class="secondary-button full" data-go="settings" type="button">前往配置飞书 →</button></article>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="page-intro">
+          <div><span class="section-kicker">SYSTEM CONTROL</span><h2>系统设置</h2><p>所有预算、采集频率和密钥都保存在专用机本地，不写入页面文件。</p></div>
+          <div class="intro-actions"><button class="secondary-button" id="toggleAdvancedSettings" type="button">显示高级参数</button></div>
+        </div>
+        <div class="basic-settings-note"><strong>默认只显示首次使用必需项</strong><span>小红书开关、关键词、登录检查、文本模型、视觉模型和生图连接。抓取数量、并发、预算、二做、24小时与飞书在“高级参数”中。</span></div>
+        <form class="settings-form" id="settingsForm" novalidate>
+          <article class="settings-card" id="basicSettingsCard">
+            <div><span class="settings-icon">◎</span><h3>抓取目标与调度</h3><p>这里定义抓取 Agent 要找什么；高级浏览器参数保持低频安全。</p></div>
+            <div class="field-grid">
+              <label class="toggle-field advanced-setting"><span><b>24小时自动工作流</b><small>自动执行所有已启用平台的抓取与AI预选，人工关卡处暂停</small></span><input name="workflowAutoEnabled" type="checkbox"><i></i></label>
+              <label class="toggle-field"><span><b>小红书</b><small>独立启停，不影响抖音</small></span><input name="xhsEnabled" type="checkbox"><i></i></label>
+              <label class="toggle-field advanced-setting"><span><b>抖音</b><small>低频搜索公开图文；仅图文入池，视频、验证码和私密内容会停止并提示人工处理</small></span><input name="douyinEnabled" type="checkbox"><i></i></label>
+              <label class="wide"><span>小红书关键词（每行一个）</span><textarea id="xhsKeywords" name="xhsKeywords" rows="5" placeholder="内容运营&#10;企业增长"></textarea></label>
+              <label class="wide advanced-setting"><span>抖音关键词（每行一个）</span><textarea id="douyinKeywords" name="douyinKeywords" rows="5" placeholder="内容运营&#10;企业增长"></textarea></label>
+              <label class="advanced-setting"><span>手动每个平台原始抓取量</span><input name="manualRawLimit" type="number" min="30" max="50"></label>
+              <label class="advanced-setting"><span>手动最终候选</span><input name="manualFinalLimit" type="number" min="1" max="10"></label>
+              <label class="advanced-setting"><span>自动每轮每个平台原始抓取量</span><input name="automaticRawLimit" type="number" min="50" max="500"></label>
+              <label class="advanced-setting"><span>自动每轮最终候选</span><input name="automaticFinalLimit" type="number" min="1" max="10"></label>
+              <label class="advanced-setting"><span>上午自动运行</span><input name="autoMorningTime" type="time"></label>
+              <label class="advanced-setting"><span>下午自动运行</span><input name="autoAfternoonTime" type="time"></label>
+              <input name="xhsMaxPerKeyword" type="hidden" value="50">
+              <label class="advanced-setting"><span>最低滚动加载轮次</span><input name="xhsScrollRounds" type="number" min="0" max="12"></label>
+              <label class="advanced-setting"><span>关键词间隔（毫秒）</span><input name="xhsDelayMs" type="number" min="1000" max="30000" step="500"></label>
+              <label class="advanced-setting"><span>抖音关键词间隔（毫秒）</span><input name="douyinDelayMs" type="number" min="1500" max="30000" step="500"></label>
+              <label class="advanced-setting"><span>每日候选上限</span><input name="dailyCandidateLimit" type="number" min="10"></label>
+              <label class="advanced-setting"><span>每日AI精读上限</span><input name="aiAnalysisLimit" type="number" min="1"></label>
+              <label class="advanced-setting"><span>每次生成套数</span><input name="generationCount" type="number" min="1" max="20"></label>
+              <label class="advanced-setting"><span>二做生成套数</span><input name="scaleGenerationCount" type="number" min="1" max="20"></label>
+              <label class="toggle-field advanced-setting"><span><b>二次分析自动采样</b><small>仅采集登记过的已发布小红书笔记；遇到登录/验证即暂停</small></span><input name="performanceAutoEnabled" type="checkbox"><i></i></label>
+              <label class="advanced-setting"><span>采样节点（小时，逗号分隔）</span><input name="performanceSampleHours" type="text" placeholder="2, 24, 72"></label>
+              <label class="advanced-setting"><span>账号基线样本数</span><input name="performanceAccountBaselineNotes" type="number" min="3" max="100"></label>
+              <div class="collector-status-card wide"><div><span id="xhsCollectorStatus">等待状态</span><p id="xhsCollectorDetail">正在读取小红书采集器状态…</p></div><div class="collector-actions"><button class="secondary-button" id="openXhsLogin" type="button">打开登录窗口</button><button class="secondary-button" id="checkXhsLogin" type="button">检查登录状态</button><button class="primary-button" id="testXhsCollection" type="button">测试抓取</button></div></div>
+              <div class="collector-status-card wide advanced-setting"><div><span id="douyinCollectorStatus">等待抖音采集</span><p id="douyinCollectorDetail">登录后可按关键词低频采集公开抖音图文；候选池仍可补充单条链接。</p></div><div class="collector-actions"><button class="secondary-button" id="openDouyinLogin" type="button">打开抖音登录</button><button class="primary-button" id="testDouyinCollection" type="button">测试采集</button></div></div>
+              <div class="collector-status-card wide advanced-setting"><div><span id="performanceCollectorStatus">等待小红书创作后台</span><p id="performanceCollectorDetail">发布后将以 2 / 24 / 72 小时保存后台数据快照；也可在“二次分析与放大”页手动读取。</p></div><div class="collector-actions"><button class="secondary-button" id="openCreatorLoginFromSettings" type="button">打开后台登录</button><button class="primary-button" id="testPerformanceCollection" type="button">测试读取后台</button></div></div>
+            </div>
+          </article>
+          <article class="settings-card">
+            <div><span class="settings-icon">文</span><h3>文本模型连接档案</h3><p>每个供应商单独保存、单独测试；只有测试成功的档案才能设为当前。</p></div>
+            <div class="field-grid">
+              <label class="advanced-setting"><span>每日预算（元）</span><input name="dailyBudget" type="number" min="1" step="1"></label>
+              <div class="model-profile-note wide">所有档案按 OpenAI Chat Completions 兼容格式请求。切换供应商时只需新建、测试、设为当前；旧档案和 Key 保留在本机。</div>
+              <div class="model-profile-list wide" id="textProfileList"></div>
+              <button class="secondary-button wide" id="addTextProfile" type="button">+ 新建文本连接档案</button>
+            </div>
+          </article>
+          <article class="settings-card">
+            <div><span class="settings-icon">视</span><h3>视觉模型连接档案</h3><p>独立读取图片、OCR补充、拆解封面与逐页版式；结果交给文本模型复审。</p></div>
+            <div class="field-grid">
+              <label class="advanced-setting"><span>视觉每日预算（元）</span><input name="visionDailyBudget" type="number" min="0" step="1"></label>
+              <label class="advanced-setting"><span>每篇最多分析图片</span><input name="visionMaxImages" type="number" min="1" max="20"></label>
+              <label class="advanced-setting"><span>候选分析并发数</span><input name="analysisConcurrency" type="number" min="1" max="5"></label>
+              <label class="advanced-setting"><span>分析临时失败自动重试</span><input name="analysisAutoRetryCount" type="number" min="0" max="3"></label>
+              <div class="model-profile-list wide" id="visionProfileList"></div>
+              <button class="secondary-button wide" id="addVisionProfile" type="button">+ 新建视觉连接档案</button>
+            </div>
+          </article>
+          <article class="settings-card advanced-setting">
+            <div><span class="settings-icon">做</span><h3>一做图片规则</h3><p>这是生图前的硬约束：文本模型只能依照这里写每页提示词，生图模型再按提示词执行。规则与企业素材库会共同进入生产。</p></div>
+            <div class="field-grid">
+              <label><span>每套图片张数</span><input name="imageCount" type="number" min="2" max="12"></label>
+              <label><span>实际输出画布</span><select name="imageAspectRatio"><option value="2:3">2:3 竖图（1024×1536，推荐）</option><option value="1:1">1:1 方图（1024×1024）</option><option value="3:2">3:2 横图（1536×1024）</option></select><small>这里显示供应商实际返回尺寸；视觉质检会按同一画布判断，不再把 2:3 误判为 3:4 或 9:16。</small></label>
+              <label><span>提示词草稿文字偏好</span><select name="imageTextMode"><option value="free">由提示词自行决定（推荐）</option><option value="exact">草稿倾向指定文字</option><option value="suggest">草稿倾向参考文案排版</option><option value="no_text">草稿倾向无文字</option></select><small>只影响文本 AI 生成的提示词草稿；最终以工作台中人工确认的本页生图提示词为准，后端不会追加隐藏要求。</small></label>
+              <label><span>画面类型</span><select name="imageStyle"><option value="realistic">实景/写实</option><option value="illustration">插画</option><option value="3d">3D</option><option value="animated">动画感</option></select></label>
+              <label><span>单张生图超时（秒）</span><input name="imageSingleTimeoutSeconds" type="number" min="30" max="900" step="10"></label>
+              <label><span>整组任务最长时间（分钟）</span><input name="imageJobTimeoutMinutes" type="number" min="2" max="120"></label>
+              <label><span>同时运行的图片任务</span><input name="imageMaxConcurrentJobs" type="number" min="1" max="8"></label>
+              <label><span>质检通过分</span><input name="imageQualityThreshold" type="number" min="50" max="100"></label>
+              <label><span>质检后自动重做次数</span><input name="imageAutoRetryCount" type="number" min="0" max="2"></label>
+              <label class="toggle-field"><span><b>启用视觉质检</b><small>生成后用视觉模型检查是否符合页面任务；失败可标记人工重做</small></span><input name="imageQualityReviewEnabled" type="checkbox"><i></i></label>
+              <label class="wide"><span>品牌色（每行一条）</span><textarea name="brandColors" rows="3" placeholder="例如：品牌蓝 #1D5DB8"></textarea></label>
+              <label class="wide"><span>必须出现的内容（每行一条）</span><textarea name="mustShow" rows="3" placeholder="例如：产品包装、品牌吉祥物；未填写则由企业素材库与每页提示词决定"></textarea></label>
+              <label class="wide"><span>禁止出现的元素（每行一条）</span><textarea name="prohibitedElements" rows="3" placeholder="例如：竞品 Logo、夸张疗效、人物肖像、二维码"></textarea></label>
+            </div>
+          </article>
+          <article class="settings-card">
+            <div><span class="settings-icon">图</span><h3>生图模型连接档案</h3><p>必须兼容 OpenAI Images Generations，并返回 b64_json 本地图片数据。先连接测试成功，再启用；图片生成会单独计算预算，不挤占文本分析预算。</p></div>
+            <div class="field-grid">
+              <label class="advanced-setting"><span>每日图片预算（元）</span><input name="imageDailyBudget" type="number" min="0" step="1"></label>
+              <label class="advanced-setting"><span>单张固定成本（元，可为0）</span><input name="imageCostPerImage" type="number" min="0" step="0.01"></label>
+              <div class="model-profile-list wide" id="imageProfileList"></div>
+              <button class="secondary-button wide" id="addImageProfile" type="button">+ 新建生图连接档案</button>
+            </div>
+          </article>
+          <article class="settings-card advanced-setting">
+            <div><span class="settings-icon">飞</span><h3>飞书告警</h3><p>连接企业群机器人，异常时由主管主动找人。</p></div>
+            <div class="field-grid"><label class="wide"><span>飞书机器人 Webhook</span><input name="feishuWebhook" type="url" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."></label><div class="form-action-row wide"><button class="secondary-button" id="testFeishu" type="button">发送测试消息</button></div></div>
+          </article>
+          <div class="settings-actions"><button class="danger-text-button advanced-setting" id="resetDemo" type="button">清空本地业务数据</button><button class="primary-button" type="submit">保存设置</button></div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-layer" id="sourceModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="sourceModalTitle">
+    <div class="modal-card small-modal">
+      <button class="modal-close" data-close="sourceModal" type="button">×</button>
+      <span class="section-kicker">MANUAL SOURCE</span><h2 id="sourceModalTitle">导入一条公开图文</h2><p>小红书与抖音都会在各自专用浏览器中实际读取正文、图片与公开互动数据；读取失败不会再写入空线索。</p>
+      <form id="sourceForm" class="modal-form">
+        <label><span>平台</span><select name="platform"><option>小红书</option><option>抖音</option></select></label>
+        <label><span>内容链接</span><input name="url" type="url" required placeholder="粘贴公开内容链接；抖音优先使用 /note/ 作品链接"></label>
+        <label><span>暂定标题</span><input name="title" type="text" placeholder="可选，后续由系统识别"></label>
+        <button class="primary-button full" type="submit">加入自动分析队列</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="metricsModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="metricsModalTitle">
+    <div class="modal-card small-modal">
+      <button class="modal-close" data-close="metricsModal" type="button">×</button>
+      <span class="section-kicker">PUBLISH TRACKING</span><h2 id="metricsModalTitle">登记发布并自动跟踪</h2><p id="metricsVariantTitle">粘贴已发布的小红书链接，数据循环 Agent 会自动监听。</p>
+      <form id="metricsForm" class="modal-form two-column">
+        <input name="variantId" type="hidden">
+        <label class="wide"><span>已发布作品链接</span><input name="link" type="url" required placeholder="粘贴小红书已发布笔记链接"></label>
+        <label class="wide"><span>实际发布时间</span><input name="publishedAt" type="datetime-local" required></label>
+        <p class="wide form-hint">保存后，系统会立即尝试从已登录的小红书创作服务平台读取初始快照，并在 2 / 24 / 72 小时持续自动采样与二次分析。你不需要手填任何数据。</p>
+        <details class="wide manual-metrics-fallback"><summary>创作后台异常时，才手动补录初始数据（可选）</summary><div class="manual-metrics-grid"><label><span>曝光/播放</span><input name="exposure" type="number" min="0"></label><label><span>点赞</span><input name="likes" type="number" min="0"></label><label><span>收藏</span><input name="saves" type="number" min="0"></label><label><span>评论</span><input name="comments" type="number" min="0"></label></div></details>
+        <button class="primary-button full wide" type="submit">登记链接并开启自动跟踪</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="variantModal" aria-hidden="true" role="dialog" aria-modal="true" aria-label="图文预览与修改">
+    <div class="modal-card variant-modal-card" id="variantModalContent"></div>
+  </div>
+
+  <div class="modal-layer" id="enterpriseModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="enterpriseModalTitle">
+    <div class="modal-card">
+      <button class="modal-close" data-close="enterpriseModal" type="button">×</button>
+      <span class="section-kicker">PRODUCTION INPUT</span><h2 id="enterpriseModalTitle">新建企业素材库</h2><p>一行一条的内容会成为后续 AI 生产时的明确依据和限制。</p>
+      <form id="enterpriseForm" class="modal-form two-column enterprise-form">
+        <input name="id" type="hidden">
+        <label><span>资料库名称</span><input name="name" type="text" required placeholder="例如：食品安全产品线"></label>
+        <label><span>行业/品类</span><input name="category" type="text" placeholder="例如：食品检测服务"></label>
+        <label><span>品牌名称</span><input name="brandName" type="text" placeholder="企业品牌"></label>
+        <label><span>产品/服务名称</span><input name="productName" type="text" placeholder="具体产品或服务"></label>
+        <label class="wide"><span>品牌定位</span><textarea name="positioning" rows="3" placeholder="我们是谁、解决什么问题、与竞品有什么区别"></textarea></label>
+        <label class="wide"><span>目标人群</span><textarea name="audience" rows="3" placeholder="面向谁、典型痛点、使用场景"></textarea></label>
+        <label class="wide"><span>品牌语气/账号人设</span><textarea name="brandVoice" rows="3" placeholder="例如：专业但不吓人，引用事实，避免高高在上"></textarea></label>
+        <label class="wide"><span>产品事实（每行一条）</span><textarea name="productFacts" rows="5" placeholder="只能填写可确认的真实信息，例如功能、规格、适用范围"></textarea></label>
+        <label class="wide"><span>核心卖点（每行一条）</span><textarea name="sellingPoints" rows="4" placeholder="希望内容重点表达的价值"></textarea></label>
+        <label class="wide"><span>证据与资质（每行一条）</span><textarea name="proofPoints" rows="4" placeholder="检测报告、认证、数据出处、客户授权案例等"></textarea></label>
+        <label class="wide"><span>禁止宣传/红线（每行一条）</span><textarea name="forbiddenClaims" rows="4" placeholder="不可使用的词、不可承诺的效果、法律和品牌红线"></textarea></label>
+        <label class="wide"><span>视觉要求（每行一条）</span><textarea name="visualRules" rows="4" placeholder="Logo、品牌色、产品外观、图片风格等；会与设置页的一做图片规则共同约束生图"></textarea></label>
+        <section class="enterprise-images wide" aria-labelledby="enterpriseImagesTitle">
+          <div class="enterprise-images-head"><div><span>企业图片资产（可选）</span><b id="enterpriseImagesTitle">产品、场景与品牌参考图</b><small>图片保存在本机；填写图片说明后才会进入一做的企业约束。未填写说明的图片仍会归档，方便后续补充。</small></div><button class="secondary-button" id="addEnterpriseImage" type="button">＋ 添加图片</button></div>
+          <div class="enterprise-image-list" id="enterpriseImageList"></div>
+        </section>
+        <label class="wide"><span>参考资料链接（每行一条）</span><textarea name="referenceLinks" rows="3" placeholder="产品页、公开报告或内部可访问资料链接"></textarea></label>
+        <label class="wide"><span>补充说明</span><textarea name="notes" rows="3"></textarea></label>
+        <label class="toggle-field wide"><span><b>保存后设为当前生产资料库</b><small>后续将允许每次生产单独选择；当前先设置一个默认库</small></span><input name="makeActive" type="checkbox" checked><i></i></label>
+        <button class="primary-button full wide" type="submit">保存企业素材库</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="enterpriseImageModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="enterpriseImageModalTitle">
+    <div class="modal-card small-modal">
+      <button class="modal-close" data-close="enterpriseImageModal" type="button">×</button>
+      <span class="section-kicker">LOCAL ENTERPRISE ASSET</span><h2 id="enterpriseImageModalTitle">添加企业图片</h2><p>不上传到第三方；保存到当前 Windows 用户的本机业务目录。图片说明可后补：只有填写说明的图片才会被 AI 当作生产约束。</p>
+      <form id="enterpriseImageForm" class="modal-form">
+        <label><span>图片文件</span><input name="file" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+        <label><span>用途分类</span><select name="kind"><option value="product">产品实拍</option><option value="scene">使用/业务场景</option><option value="brand">品牌视觉</option><option value="reference">构图/风格参考</option></select></label>
+        <label><span>素材名称（可选）</span><input name="name" type="text" maxlength="160" placeholder="例如：产品正面包装图"></label>
+        <label><span>图片中有什么/可用于什么（可选）</span><textarea name="description" rows="4" maxlength="1200" placeholder="填写后会成为 AI 的企业约束；例如：白色包装盒正面，左上有品牌标识"></textarea></label>
+        <label><span>不可改动或限制说明（可选）</span><textarea name="immutableNotes" rows="3" maxlength="800" placeholder="例如：不可虚构认证标识；不可替换包装上的文字"></textarea></label>
+        <button class="primary-button full" type="submit">保存图片素材</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="enterpriseExportModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="enterpriseExportModalTitle">
+    <div class="modal-card small-modal">
+      <button class="modal-close" data-close="enterpriseExportModal" type="button">×</button>
+      <span class="section-kicker">PORTABLE LIBRARY SNAPSHOT</span><h2 id="enterpriseExportModalTitle">导出企业素材库</h2><p id="enterpriseExportHint">导出文字资料、图片原文件、图片说明与清单。导出是只读快照，不会修改当前资料库。</p>
+      <form id="enterpriseExportForm" class="modal-form">
+        <input name="profileId" type="hidden">
+        <label><span>指定导出文件夹</span><input name="directory" type="text" required placeholder="例如 D:\企业资料库备份"></label>
+        <small>系统会在该文件夹内新建一个带时间的资料库快照目录；不会覆盖旧导出包。</small>
+        <button class="primary-button full" type="submit">导出完整资料库</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="modelProfileModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="modelProfileModalTitle">
+    <div class="modal-card small-modal">
+      <button class="modal-close" data-close="modelProfileModal" type="button">×</button>
+      <span class="section-kicker">MODEL CONNECTION</span><h2 id="modelProfileModalTitle">新建模型连接档案</h2><p>Key 仅保存在本机 Windows 加密存储。接口必须兼容 OpenAI Chat Completions。</p>
+      <form id="modelProfileForm" class="modal-form two-column">
+        <input name="id" type="hidden"><input name="kind" type="hidden">
+        <label><span>档案名称</span><input name="name" type="text" required placeholder="例如 DeepSeek 文本主力"></label>
+        <label><span>供应商备注</span><input name="provider" type="text" placeholder="例如 DeepSeek / 兔子"></label>
+        <label class="wide"><span>接口根地址或 /v1 地址</span><input name="baseUrl" type="url" required placeholder="https://api.openai.com/v1"></label>
+        <label class="wide"><span>模型名称</span><input name="model" type="text" required placeholder="例如 deepseek-chat"></label>
+        <label class="wide" id="imageInputModeField" hidden><span>生图输入模式</span><select name="imageInputMode"><option value="text_only">文生图（/images/generations，JSON）</option><option value="reference_generation_json">参考图生图（/images/generations，JSON image 数组，兔子推荐）</option><option value="reference_edit">参考图生图（/images/edits，multipart，标准 OpenAI）</option></select><small>兔子 gpt-image-2 应选择 Generations JSON 参考图模式；其他标准 OpenAI 供应商可选择 Edits multipart。连接测试会真实上传一张隔离测试图。</small></label>
+        <label><span>输入价格（元/百万 tokens）</span><input name="inputPricePerMillion" type="number" min="0" step="0.01" value="0"></label>
+        <label><span>输出价格（元/百万 tokens）</span><input name="outputPricePerMillion" type="number" min="0" step="0.01" value="0"></label>
+        <label><span>最大输出 tokens</span><input name="maxOutputTokens" type="number" min="100" max="20000" value="4000"></label>
+        <label><span>API 请求超时（秒）</span><input name="requestTimeoutSeconds" type="number" min="10" max="1800" value="120"></label>
+        <label class="wide"><span>API Key（编辑时留空即保留已保存的 Key）</span><input name="apiKey" type="password" autocomplete="new-password" placeholder="不会显示或回传已保存的 Key"></label>
+        <div class="credential-row wide"><span id="modelProfileTestStatus">保存后请先测试；测试成功才可设为当前。</span><div><button class="secondary-button" id="testModelProfile" type="button">保存并测试</button><button class="primary-button" type="submit">保存档案</button></div></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toastStack"></div>
+  <script src="app.js"></script>
+</body>
+</html>
