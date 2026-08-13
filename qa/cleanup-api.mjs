@@ -1,0 +1,35 @@
+import { spawn } from 'node:child_process';
+import { readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const dataDir = resolve(process.env.TEMP || root, `ContentOpsAgentV2-QA-cleanup-${process.pid}`); const port = 17840;
+await rm(dataDir, { recursive: true, force: true }); await mkdir(dataDir, { recursive: true });
+const stamp = new Date().toISOString();
+const state = { version:2, mode:'workflow-agent', createdAt:stamp, lastSavedAt:stamp, settings:{ xhsKeywords:['测试'], generationCount:10, scaleGenerationCount:7 }, agents:[], candidates:[
+  {id:'candidate_ignored',title:'已忽略候选',status:'ignored'}, {id:'candidate_active',title:'进行中已忽略候选',status:'ignored'}, {id:'candidate_free',title:'普通候选',status:'new'}, {id:'candidate_parent',title:'二做母版候选',status:'generated'}, {id:'candidate_restore',title:'删除成品后恢复',status:'generated'}
+], variants:[
+  {id:'variant_draft',candidateId:'candidate_free',status:'pending',title:'草稿'}, {id:'variant_published',candidateId:'candidate_free',status:'published',title:'已发布',metrics:{exposure:10}}, {id:'variant_active_draft',candidateId:'candidate_active',workflowRunId:'run_active',status:'pending',title:'进行中草稿'}, {id:'variant_parent',candidateId:'candidate_parent',status:'pending',title:'待审母版'}, {id:'variant_child_published',candidateId:'candidate_parent',parentVariantId:'variant_parent',status:'published',title:'已发布二做',metrics:{exposure:20}}, {id:'variant_restore',candidateId:'candidate_restore',status:'pending',title:'最后一套待审成品'}
+], publications:[{id:'pub_1',variantId:'variant_published'},{id:'pub_2',variantId:'variant_child_published'}], materials:[{id:'material_published',sourceVariantId:'variant_published',type:'胜出内容',name:'已发布',uses:1,status:'已验证',score:90}], enterpriseProfiles:[{id:'enterprise_1',name:'企业库',brandName:'品牌',productName:'产品',productFacts:['事实'],sellingPoints:[],proofPoints:[],forbiddenClaims:[],visualRules:[],referenceLinks:[],status:'active',createdAt:stamp,updatedAt:stamp}], activeEnterpriseProfileId:'enterprise_1', workflowRuns:[
+  {id:'run_active',status:'waiting_human',currentStep:'select',candidateIds:['candidate_active'],counts:{},startedAt:stamp,finishedAt:'',steps:[{id:'select',status:'waiting_human',detail:'等待人工选款'},{id:'create',status:'pending',detail:''}]}, {id:'run_done',status:'completed',currentStep:'scale',candidateIds:[],counts:{}}
+], activity:[] };
+await writeFile(resolve(dataDir,'state.json'), JSON.stringify(state,null,2)); await writeFile(resolve(dataDir,'state.backup.json'), JSON.stringify(state,null,2));
+const child=spawn(process.execPath,[resolve(root,'server.cjs')],{cwd:root,env:{...process.env,CONTENTOPS_PORT:String(port),CONTENTOPS_DATA_DIR:dataDir},windowsHide:true,stdio:['ignore','pipe','pipe']}); let stderr=''; child.stderr.on('data',(chunk)=>stderr+=chunk);
+const post=(route,body={})=>fetch(`http://127.0.0.1:${port}${route}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()); const getState=()=>fetch(`http://127.0.0.1:${port}/api/state`).then(r=>r.json());
+try{
+  for(let i=0;i<80;i++){try{if((await fetch(`http://127.0.0.1:${port}/health`)).ok)break;}catch{} await new Promise(done=>setTimeout(done,100));}
+  const blocked=await post('/api/candidate/delete',{id:'candidate_active'}); if(blocked.ok)throw new Error('进行中候选不应删除');
+  const partialCleanup=await post('/api/candidate/cleanup',{scope:'ignored'}); if(partialCleanup.candidatesDeleted!==1||partialCleanup.blockedByWorkflow!==1||partialCleanup.blocked!==1||!partialCleanup.message.includes('受保护未删除'))throw new Error(`部分清理反馈错误:${JSON.stringify(partialCleanup)}`);
+  const blockedCleanup=await post('/api/candidate/cleanup',{scope:'ignored'}); if(blockedCleanup.candidatesDeleted!==0||blockedCleanup.blockedByWorkflow!==1||!blockedCleanup.message.includes('未删除'))throw new Error(`零删除反馈错误:${JSON.stringify(blockedCleanup)}`);
+  const stopped=await post('/api/master/stop'); if(!stopped.ok||stopped.cancelledRuns!==1)throw new Error(`等待人工任务未被停止:${JSON.stringify(stopped)}`);
+  const stoppedState=await getState(); const stoppedRun=stoppedState.workflowRuns.find(run=>run.id==='run_active'); if(stoppedRun.status!=='cancelled'||!stoppedRun.finishedAt||stoppedRun.steps[0].status!=='cancelled'||stoppedRun.steps[1].status!=='skipped'||stoppedState.runtime.workflowRunning)throw new Error(`停止状态未收口:${JSON.stringify(stoppedRun)}`);
+  const cleanedAfterStop=await post('/api/candidate/cleanup',{scope:'ignored'}); if(cleanedAfterStop.candidatesDeleted!==1)throw new Error(`停止后候选仍被锁:${JSON.stringify(cleanedAfterStop)}`);
+  const publishedDelete=await post('/api/variant/delete',{id:'variant_published'}); if(publishedDelete.ok)throw new Error('已发布版本不应删除');
+  const publishedCandidateDelete=await post('/api/candidate/delete',{id:'candidate_free'}); if(publishedCandidateDelete.ok)throw new Error('关联已发布版本的候选不应删除');
+  const parentDelete=await post('/api/variant/delete',{id:'variant_parent'}); if(parentDelete.ok)throw new Error('存在已发布子版本的父版本不应删除');
+  const cleanedVariants=await post('/api/variant/cleanup'); if(cleanedVariants.deleted!==2)throw new Error('草稿清理数量错误');
+  const cleanedRuns=await post('/api/workflow/cleanup'); if(cleanedRuns.deleted!==2)throw new Error(`已结束任务清理数量错误:${JSON.stringify(cleanedRuns)}`);
+  const current=await getState(); if(!current.enterpriseProfiles.length||current.settings.scaleGenerationCount!==7||current.candidates.find(v=>v.id==='candidate_restore')?.status!=='selected'||current.variants.some(v=>v.id==='variant_draft')||!['variant_published','variant_parent','variant_child_published'].every(id=>current.variants.some(v=>v.id===id))||current.variants.some(v=>v.id==='variant_active_draft')||current.publications.length!==2||current.materials.length!==1){console.error(JSON.stringify({candidates:current.candidates.map(v=>({id:v.id,status:v.status})),variants:current.variants.map(v=>({id:v.id,status:v.status,run:v.workflowRunId,parent:v.parentVariantId})),publications:current.publications,materials:current.materials,runs:current.workflowRuns},null,2));throw new Error('清理边界、候选恢复或配置保留异常');}
+  console.log(JSON.stringify({status:'PASS',activeProtected:!blocked.ok,partialCleanupExplained:true,zeroDeleteExplained:true,waitingHumanCancelled:true,cleanupUnlockedAfterStop:true,publishedProtected:!publishedDelete.ok,publishedCandidateProtected:!publishedCandidateDelete.ok,publishedChildProtected:!parentDelete.ok,activeDraftProtected:true,lastVariantDeletionRestoresCandidate:true,candidatesDeleted:partialCleanup.candidatesDeleted+cleanedAfterStop.candidatesDeleted,variantsDeleted:cleanedVariants.deleted,runsDeleted:cleanedRuns.deleted,enterprisePreserved:true,scaleGenerationCount:current.settings.scaleGenerationCount},null,2));
+}finally{child.kill();await new Promise(done=>setTimeout(done,300));await rm(dataDir,{recursive:true,force:true});if(stderr)process.stderr.write(stderr);}

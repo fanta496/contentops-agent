@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { visionEndpoint, safeImageUrls, responseText, callVisionJson, VISION_TEST_IMAGE_URL } = require('../ai/vision-compatible.cjs');
+assert.deepEqual(visionEndpoint('https://api.tu-zi.com'), { url:'https://api.tu-zi.com/v1/chat/completions', format:'chat' });
+assert.deepEqual(visionEndpoint('https://api.tu-zi.com/v1'), { url:'https://api.tu-zi.com/v1/chat/completions', format:'chat' });
+assert.deepEqual(visionEndpoint('https://api.tu-zi.com/v1/responses'), { url:'https://api.tu-zi.com/v1/responses', format:'responses' });
+assert.deepEqual(safeImageUrls(['http://sns-webpic-qc.xhscdn.com/a.jpg','javascript:bad','https://evil.example/a.jpg']), ['https://sns-webpic-qc.xhscdn.com/a.jpg']);
+assert.deepEqual(safeImageUrls(['https://p3.douyinpic.com/obj/a.webp','https://p9.byteimg.com/obj/b.webp','https://evil.example/a.jpg']), ['https://p3.douyinpic.com/obj/a.webp','https://p9.byteimg.com/obj/b.webp']);
+assert.deepEqual(safeImageUrls([VISION_TEST_IMAGE_URL]), []);
+assert.deepEqual(safeImageUrls([VISION_TEST_IMAGE_URL], 12, { allowTrustedTestImage: true }), [VISION_TEST_IMAGE_URL]);
+assert.equal(responseText({ output:[{content:[{type:'output_text',text:'{"ok":true}'}]}] }), '{"ok":true}');
+assert.match(String(callVisionJson), /max_tokens/);
+console.log(JSON.stringify({status:'PASS',visionEndpoint:true,imageAllowlist:true,responseParsing:true},null,2));
