@@ -104,8 +104,8 @@ function creatorSessionStatus(result = {}) {
 }
 
 class XiaohongshuCreatorCenterCollector {
-  constructor({ chromePath, chromeDiagnostic, profileDir, errorDir, port = 17841, headless = false, creatorUrl = CREATOR_HOME }) {
-    this.session = new ChromeSession({ chromePath, chromeDiagnostic, profileDir, port, headless });
+  constructor({ chromePath, chromeDiagnostic, profileDir, errorDir, headless = false, creatorUrl = CREATOR_HOME }) {
+    this.session = new ChromeSession({ chromePath, chromeDiagnostic, profileDir, headless });
     this.errorDir = errorDir;
     this.creatorUrl = creatorUrl;
   }

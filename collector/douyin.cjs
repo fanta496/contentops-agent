@@ -198,8 +198,8 @@ function detailScript(expectedId = '') {
 }
 
 class DouyinCollector {
-  constructor({ chromePath, chromeDiagnostic, profileDir, errorDir, port = 17842, headless = false, detailBaseUrl = 'https://www.douyin.com', searchBaseUrl = '' }) {
-    this.session = new ChromeSession({ chromePath, chromeDiagnostic, profileDir, port, headless });
+  constructor({ chromePath, chromeDiagnostic, profileDir, errorDir, headless = false, detailBaseUrl = 'https://www.douyin.com', searchBaseUrl = '' }) {
+    this.session = new ChromeSession({ chromePath, chromeDiagnostic, profileDir, headless });
     this.errorDir = errorDir;
     this.detailBaseUrl = String(detailBaseUrl || 'https://www.douyin.com').replace(/\/+$/, '');
     this.searchBaseUrl = String(searchBaseUrl || '').replace(/\/+$/, '');
@@ -389,9 +389,10 @@ class DouyinCollector {
         if (!await this.navigateWithStop(client, keywordSearchUrl, Math.max(700, Math.min(2500, delayMs)), shouldStop)) return { ok:false, code:'MASTER_STOPPED', message:'人工总控已停止，抖音采集已中断' };
         // Douyin may preload an out-of-process verification iframe even without
         // showing a challenge.  A target URL alone is therefore insufficient.
-        const targets = await this.session.listTabs();
-        const challengeFrame = targets.some((target) => target.type === 'iframe' && target.parentId === tab.id && /(?:verifycenter|nocaptcha|captcha|rc-verify)/i.test(String(target.url || '')));
-        const challengeFrameVisible = challengeFrame && await client.evaluate(`(() => [...document.querySelectorAll('iframe')].some((frame) => { if (!/(?:verifycenter|nocaptcha|captcha|rc-verify)/i.test(frame.src || '')) return false; if (typeof frame.checkVisibility === 'function' && !frame.checkVisibility({ checkOpacity:true, checkVisibilityCSS:true })) return false; const box=frame.getBoundingClientRect(), style=getComputedStyle(frame); return box.width>8 && box.height>8 && box.right>0 && box.bottom>0 && box.left<innerWidth && box.top<innerHeight && style.display!=='none' && style.visibility!=='hidden' && Number(style.opacity || 1)>0; }))()`);
+        // CDP pipe target metadata does not expose the legacy HTTP endpoint's
+        // iframe parent field. Inspect the visible page directly so a challenge
+        // is never missed merely because Chromium changed target bookkeeping.
+        const challengeFrameVisible = await client.evaluate(`(() => [...document.querySelectorAll('iframe')].some((frame) => { if (!/(?:verifycenter|nocaptcha|captcha|rc-verify)/i.test(frame.src || '')) return false; if (typeof frame.checkVisibility === 'function' && !frame.checkVisibility({ checkOpacity:true, checkVisibilityCSS:true })) return false; const box=frame.getBoundingClientRect(), style=getComputedStyle(frame); return box.width>8 && box.height>8 && box.right>0 && box.bottom>0 && box.left<innerWidth && box.top<innerHeight && style.display!=='none' && style.visibility!=='hidden' && Number(style.opacity || 1)>0; }))()`);
         if (challengeFrameVisible) return { ok:false, code:'CAPTCHA', message:'抖音要求安全验证，已停止采集，请人工处理', screenshot:await this.captureFailure(client, 'captcha') };
         const remainingKeywords = normalized.length - index;
         const keywordRawGoal = Math.max(1, Math.ceil((rawTarget - stats.raw) / remainingKeywords));

@@ -5,6 +5,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { XiaohongshuCollector } = require('./collector/xiaohongshu.cjs');
+const { ChromeSession } = require('./collector/chrome-session.cjs');
 const { DouyinCollector } = require('./collector/douyin.cjs');
 const { XiaohongshuCreatorCenterCollector, numberFromText, percentFromText, secondsFromText, normalizeTitle, noteIdFromUrl } = require('./collector/xhs-creator-center.cjs');
 const { resolveChromeRuntime } = require('./collector/chrome-runtime.cjs');
@@ -69,7 +70,7 @@ function seedCandidate(item, index) {
 function initialState() {
   return {
     version: 2, mode: 'workflow-agent', createdAt: now(), lastSavedAt: now(),
-    settings: { masterEnabled: false, textProfiles: [], visionProfiles: [], imageProfiles: [], activeTextProfileId: '', activeVisionProfileId: '', activeImageProfileId: '', collectionEnabled: false, workflowAutoEnabled: false, autoMorningTime: '10:00', autoAfternoonTime: '17:00', lastAutomaticSlot: '', manualRawLimit: 50, automaticRawLimit: 200, manualFinalLimit: 10, automaticFinalLimit: 10, dailyCandidateLimit: 500, aiAnalysisLimit: 20, analysisConcurrency: 3, analysisAutoRetryCount: 2, creationAutoRetryCount: 2, generationCount: 10, scaleGenerationCount: 5, imageCount: 4, imageAspectRatio: '2:3', imageSize: '1024x1536', imageTextMode: 'free', imageStyle: 'realistic', imageMaxConcurrentJobs: 4, concurrencyProfileVersion: 1, imageQualityReviewEnabled: true, imageQualityThreshold: 78, imageAutoRetryCount: 1, imagePipelineVersion: 3, brandColors: [], mustShow: [], prohibitedElements: [], imageDailyBudget: 30, imageSpentToday: 0, imageCostPerImage: 0, dailyBudget: 30, spentToday: 0, visionDailyBudget: 30, visionSpentToday: 0, usageDate: DAY(), candidatesToday: 0, analysesToday: 0, generationsToday: 0, imageGenerationsToday: 0, xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['内容运营'], xhsMaxPerKeyword: 50, xhsScrollRounds: 2, xhsDelayMs: 2500, douyinDelayMs: 3500, xhsChromePort: 17841, douyinChromePort: 17842, performanceAutoEnabled: true, performanceSampleHours: [2, 24, 72], performanceAccountBaselineNotes: 12, performanceLastAutomaticSlot: '', performanceNextAttemptAt: '', performancePausedCode: '', performanceLastAlertKey: '', performanceLastAlertAt: '', feishuWebhookConfigured: false, aiBaseUrl: '', aiModel: '', aiInputPricePerMillion: 0, aiOutputPricePerMillion: 0, aiCredentialConfigured: false, lastAiCheckAt: '', lastAiCheckOk: false, visionBaseUrl: 'https://api.tu-zi.com', visionModel: '', visionInputPricePerMillion: 0, visionOutputPricePerMillion: 0, visionMaxImages: 12, visionCredentialConfigured: false, lastVisionCheckAt: '', lastVisionCheckOk: false },
+    settings: { masterEnabled: false, textProfiles: [], visionProfiles: [], imageProfiles: [], activeTextProfileId: '', activeVisionProfileId: '', activeImageProfileId: '', collectionEnabled: false, workflowAutoEnabled: false, autoMorningTime: '10:00', autoAfternoonTime: '17:00', lastAutomaticSlot: '', manualRawLimit: 50, automaticRawLimit: 200, manualFinalLimit: 10, automaticFinalLimit: 10, dailyCandidateLimit: 500, aiAnalysisLimit: 20, analysisConcurrency: 3, analysisAutoRetryCount: 2, creationAutoRetryCount: 2, generationCount: 10, scaleGenerationCount: 5, imageCount: 4, imageAspectRatio: '2:3', imageSize: '1024x1536', imageTextMode: 'free', imageStyle: 'realistic', imageMaxConcurrentJobs: 4, concurrencyProfileVersion: 1, imageQualityReviewEnabled: true, imageQualityThreshold: 78, imageAutoRetryCount: 1, imagePipelineVersion: 3, brandColors: [], mustShow: [], prohibitedElements: [], imageDailyBudget: 30, imageSpentToday: 0, imageCostPerImage: 0, dailyBudget: 30, spentToday: 0, visionDailyBudget: 30, visionSpentToday: 0, usageDate: DAY(), candidatesToday: 0, analysesToday: 0, generationsToday: 0, imageGenerationsToday: 0, xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['内容运营'], xhsMaxPerKeyword: 50, xhsScrollRounds: 2, xhsDelayMs: 2500, douyinDelayMs: 3500, performanceAutoEnabled: true, performanceSampleHours: [2, 24, 72], performanceAccountBaselineNotes: 12, performanceLastAutomaticSlot: '', performanceNextAttemptAt: '', performancePausedCode: '', performanceLastAlertKey: '', performanceLastAlertAt: '', feishuWebhookConfigured: false, aiBaseUrl: '', aiModel: '', aiInputPricePerMillion: 0, aiOutputPricePerMillion: 0, aiCredentialConfigured: false, lastAiCheckAt: '', lastAiCheckOk: false, visionBaseUrl: 'https://api.tu-zi.com', visionModel: '', visionInputPricePerMillion: 0, visionOutputPricePerMillion: 0, visionMaxImages: 12, visionCredentialConfigured: false, lastVisionCheckAt: '', lastVisionCheckOk: false },
     agents: [
       { id: 'orchestrator', name: '内容总管 Agent', type: '编排', status: 'idle', detail: '等待人工启动或下一次定时任务', lastHeartbeat: now(), restarts: 0 },
     { id: 'supervisor', name: '运行监控 Agent', type: '监控', status: 'healthy', detail: '全局心跳正常', lastHeartbeat: now(), restarts: 0 },
@@ -109,7 +110,10 @@ function normalizeState(loaded) {
   next.settings.douyinEnabled = Boolean(next.settings.douyinEnabled);
   next.settings.douyinKeywords = normalizeKeywords(next.settings.douyinKeywords);
   next.settings.douyinDelayMs = finiteNumber(next.settings.douyinDelayMs, defaults.settings.douyinDelayMs, 1500, 30000);
-  next.settings.douyinChromePort = finiteNumber(next.settings.douyinChromePort, defaults.settings.douyinChromePort, 1025, 65535);
+  // v1.4.6 used fixed DevTools TCP ports. They are intentionally discarded now
+  // that Chromium is controlled through a private inherited process pipe.
+  delete next.settings.xhsChromePort;
+  delete next.settings.douyinChromePort;
   next.settings.xhsKeywords = normalizeKeywords(next.settings.xhsKeywords);
   next.settings.performanceAutoEnabled = next.settings.performanceAutoEnabled !== false;
   next.settings.performanceSampleHours = normalizePerformanceSampleHours(next.settings.performanceSampleHours);
@@ -772,7 +776,7 @@ function douyinBrowserBusy() {
   return ['抖音', '抖音链接导入', '抖音登录'].find((key) => collectionLocks.has(key)) || '';
 }
 function xhsBrowserBusy() {
-  // 公开抓取、创作后台、登录检查和链接导入共用同一份小红书 Chrome 资料与调试端口。
+  // 公开抓取、创作后台、登录检查和链接导入共用同一份小红书 Chrome 资料与私有调试管道。
   // 并发导航同一个浏览器会造成错页、命令超时和登录状态误判，必须严格串行。
   return ['小红书', '小红书后台', '小红书登录', '小红书检查', '小红书链接导入'].find((key) => collectionLocks.has(key)) || '';
 }
@@ -795,7 +799,6 @@ function createXhsCollector() {
     chromeDiagnostic: CHROME_RUNTIME.diagnostic,
     profileDir: COLLECTOR_PROFILE_DIR,
     errorDir: COLLECTOR_ERROR_DIR,
-    port: finiteNumber(process.env.CONTENTOPS_XHS_CHROME_PORT, finiteNumber(state.settings.xhsChromePort, 17841, 1025, 65535), 1025, 65535),
     headless: process.env.CONTENTOPS_COLLECTOR_HEADLESS === '1',
     searchBaseUrl: process.env.CONTENTOPS_XHS_SEARCH_BASE_URL
   });
@@ -808,7 +811,6 @@ function createDouyinCollector() {
     chromeDiagnostic: CHROME_RUNTIME.diagnostic,
     profileDir: DOUYIN_COLLECTOR_PROFILE_DIR,
     errorDir: COLLECTOR_ERROR_DIR,
-    port: finiteNumber(process.env.CONTENTOPS_DOUYIN_CHROME_PORT, state.settings.douyinChromePort, 1025, 65535),
     // The two URL overrides exist solely to let the isolated QA fixture exercise
     // the complete server-to-browser chain.  With normal launch settings both
     // are empty and the collector uses only official Douyin pages.
@@ -825,7 +827,6 @@ function createCreatorCenterCollector() {
     chromeDiagnostic: CHROME_RUNTIME.diagnostic,
     profileDir: COLLECTOR_PROFILE_DIR,
     errorDir: COLLECTOR_ERROR_DIR,
-    port: finiteNumber(process.env.CONTENTOPS_XHS_CHROME_PORT, finiteNumber(state.settings.xhsChromePort, 17841, 1025, 65535), 1025, 65535),
     headless: process.env.CONTENTOPS_COLLECTOR_HEADLESS === '1',
     creatorUrl: process.env.CONTENTOPS_XHS_CREATOR_URL
   });
@@ -2463,7 +2464,7 @@ if (SELF_TEST) scheduleTimer.unref();
 
 process.on('uncaughtException', (error) => { try { addActivity('warning', '后台发生未捕获异常', error.message); saveState(); } catch {} releaseLock(); process.stderr.write(`${error.stack || error.message}\n`); process.exit(1); });
 process.on('unhandledRejection', (error) => { try { addActivity('warning', '后台异步任务失败', String(error?.message || error)); saveState(); } catch {} releaseLock(); process.stderr.write(`${error?.stack || error}\n`); process.exit(1); });
-function shutdownCollectors() { for (const collector of activeCollectors) try { collector.closeBrowser(); } catch {}; activeCollectors.clear(); }
+function shutdownCollectors() { for (const collector of activeCollectors) try { collector.closeBrowser(); } catch {}; activeCollectors.clear(); ChromeSession.shutdownAll(); }
 process.on('SIGTERM', () => { shutdownCollectors(); releaseLock(); process.exit(0); });
 process.on('SIGINT', () => { shutdownCollectors(); releaseLock(); process.exit(0); });
 process.on('exit', releaseLock);

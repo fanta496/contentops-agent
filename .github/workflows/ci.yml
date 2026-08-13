@@ -16,6 +16,8 @@ jobs:
         run: |
           node --check app.js
           node --check server.cjs
+      - name: Security regression checks
+        run: node tests/security-regression.cjs
       - name: Build Windows launchers
         shell: powershell
         run: .\launcher\build.ps1

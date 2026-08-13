@@ -11,68 +11,127 @@ function codedError(code, message, cause) {
   return error;
 }
 
-class CdpClient {
-  constructor(url) {
-    this.socket = new WebSocket(url);
+// Chromium's remote-debugging-pipe protocol is NUL-delimited JSON over two
+// inherited process handles. Unlike a DevTools TCP port, it has no endpoint
+// that another local process can discover or connect to.
+class CdpPipeConnection {
+  constructor(input, output) {
+    this.input = input;
+    this.output = output;
     this.nextId = 1;
     this.pending = new Map();
     this.listeners = new Map();
+    this.buffer = Buffer.alloc(0);
+    this.closed = false;
+    output.on('data', (chunk) => this.handleData(chunk));
+    output.once('error', (error) => this.fail(error));
+    output.once('end', () => this.fail(codedError('BROWSER_CDP_PIPE_CLOSED', 'Chrome私有调试管道已关闭')));
+    output.once('close', () => this.fail(codedError('BROWSER_CDP_PIPE_CLOSED', 'Chrome私有调试管道已关闭')));
+    input.once('error', (error) => this.fail(error));
   }
 
-  async open(timeoutMs = 10000) {
-    await new Promise((resolve, reject) => {
-      const cleanup = () => { clearTimeout(timer); this.socket.removeEventListener('open', onOpen); this.socket.removeEventListener('error', onError); };
-      const onOpen = () => { cleanup(); resolve(); };
-      const onError = (error) => { cleanup(); reject(error); };
-      const timer = setTimeout(() => {
-        cleanup();
-        try { this.socket.close(); } catch {}
-        reject(codedError('BROWSER_CDP_CONNECT_TIMEOUT', '连接Chrome页面超时'));
-      }, timeoutMs);
-      this.socket.addEventListener('open', onOpen, { once: true });
-      this.socket.addEventListener('error', onError, { once: true });
-    });
-    this.socket.addEventListener('message', (event) => {
-      const message = JSON.parse(event.data);
-      if (message.id && this.pending.has(message.id)) {
-        const task = this.pending.get(message.id);
-        this.pending.delete(message.id);
-        clearTimeout(task.timer);
-        if (message.error) task.reject(new Error(message.error.message));
-        else task.resolve(message.result);
+  isOpen() {
+    return !this.closed && this.input && !this.input.destroyed && this.output && !this.output.destroyed;
+  }
+
+  handleData(chunk) {
+    if (this.closed) return;
+    this.buffer = Buffer.concat([this.buffer, Buffer.from(chunk)]);
+    let delimiter = this.buffer.indexOf(0);
+    while (delimiter >= 0) {
+      const raw = this.buffer.subarray(0, delimiter);
+      this.buffer = this.buffer.subarray(delimiter + 1);
+      delimiter = this.buffer.indexOf(0);
+      if (!raw.length) continue;
+      let message;
+      try { message = JSON.parse(raw.toString('utf8')); }
+      catch (error) {
+        this.fail(codedError('BROWSER_CDP_PIPE_PROTOCOL_ERROR', 'Chrome私有调试管道返回了无效数据', error));
         return;
       }
-      const callbacks = this.listeners.get(message.method) || [];
-      callbacks.forEach((callback) => callback(message.params));
-    });
-    this.socket.addEventListener('close', () => {
-      for (const task of this.pending.values()) {
-        clearTimeout(task.timer);
-        task.reject(new Error('Chrome页面连接已关闭'));
+      if (Object.prototype.hasOwnProperty.call(message, 'id') && this.pending.has(message.id)) {
+        const pending = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        clearTimeout(pending.timer);
+        if (message.error) pending.reject(new Error(message.error.message || 'Chrome调试命令失败'));
+        else pending.resolve(message.result || {});
+        continue;
       }
-      this.pending.clear();
-    });
-    return this;
+      if (!message.method) continue;
+      const callbacks = this.listeners.get(String(message.sessionId || '')) || [];
+      callbacks.forEach((callback) => callback(message));
+    }
   }
 
-  command(method, params = {}, timeoutMs = 15000) {
+  command(method, params = {}, sessionId = '', timeoutMs = 15000) {
+    if (!this.isOpen()) return Promise.reject(codedError('BROWSER_CDP_PIPE_CLOSED', 'Chrome私有调试管道不可用'));
     const id = this.nextId++;
+    const message = { id, method, params };
+    if (sessionId) message.sessionId = sessionId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(codedError('BROWSER_CDP_COMMAND_TIMEOUT', `${method} 执行超时`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.socket.send(JSON.stringify({ id, method, params })); }
-      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      try { this.input.write(Buffer.concat([Buffer.from(JSON.stringify(message), 'utf8'), Buffer.from([0])])); }
+      catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
+  }
+
+  subscribe(sessionId, callback) {
+    const key = String(sessionId || '');
+    const callbacks = this.listeners.get(key) || [];
+    callbacks.push(callback);
+    this.listeners.set(key, callbacks);
+    return () => this.listeners.set(key, (this.listeners.get(key) || []).filter((item) => item !== callback));
+  }
+
+  fail(error) {
+    if (this.closed) return;
+    this.closed = true;
+    const failure = error instanceof Error ? error : new Error(String(error || 'Chrome私有调试管道已关闭'));
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(failure);
+    }
+    this.pending.clear();
+    this.listeners.clear();
+  }
+
+  close() {
+    if (this.closed) return;
+    this.fail(codedError('BROWSER_CDP_PIPE_CLOSED', 'Chrome私有调试管道已关闭'));
+    try { this.input.end(); } catch {}
+  }
+}
+
+class CdpClient {
+  constructor(connection, sessionId) {
+    this.connection = connection;
+    this.sessionId = sessionId;
+    this.listeners = new Map();
+    this.closed = false;
+    this.unsubscribe = connection.subscribe(sessionId, (message) => {
+      const callbacks = this.listeners.get(message.method) || [];
+      callbacks.forEach((callback) => callback(message.params));
+    });
+  }
+
+  command(method, params = {}, timeoutMs = 15000) {
+    if (this.closed) return Promise.reject(codedError('BROWSER_CDP_CLIENT_CLOSED', 'Chrome页面连接已关闭'));
+    return this.connection.command(method, params, this.sessionId, timeoutMs);
   }
 
   on(method, callback) {
     const callbacks = this.listeners.get(method) || [];
     callbacks.push(callback);
     this.listeners.set(method, callbacks);
-    return () => this.listeners.set(method, callbacks.filter((item) => item !== callback));
+    return () => this.listeners.set(method, (this.listeners.get(method) || []).filter((item) => item !== callback));
   }
 
   async evaluate(expression, timeoutMs = 15000) {
@@ -82,39 +141,43 @@ class CdpClient {
   }
 
   close() {
-    try { this.socket.close(); } catch {}
+    if (this.closed) return;
+    this.closed = true;
+    this.unsubscribe?.();
+    this.connection.command('Target.detachFromTarget', { sessionId: this.sessionId }, '', 3000).catch(() => {});
   }
 }
 
-class ChromeSession {
-  constructor({ chromePath, chromeDiagnostic = '', profileDir, port, headless = false, clientFactory }) {
+class PipeBrowser {
+  constructor({ chromePath, chromeDiagnostic, profileDir, headless, spawnImpl, exists }) {
     this.chromePath = chromePath;
     this.chromeDiagnostic = chromeDiagnostic;
     this.profileDir = profileDir;
-    this.port = port;
     this.headless = headless;
-    this.pid = null;
-    this.clientFactory = clientFactory || ((url) => new CdpClient(url));
+    this.spawnImpl = spawnImpl;
+    this.exists = exists;
+    this.child = null;
+    this.connection = null;
+    this.starting = null;
   }
 
-  endpoint(pathname = '/json/version') {
-    return `http://127.0.0.1:${this.port}${pathname}`;
-  }
-
-  async isRunning() {
-    try {
-      const response = await fetch(this.endpoint(), { signal: AbortSignal.timeout(800) });
-      return response.ok;
-    } catch { return false; }
+  isRunning() {
+    return Boolean(this.child && this.connection?.isOpen());
   }
 
   async ensureStarted(url = 'about:blank') {
-    if (await this.isRunning()) return { started: false };
-    if (!fs.existsSync(this.chromePath)) throw new Error(this.chromeDiagnostic || `没有找到Chrome：${this.chromePath}`);
+    if (this.isRunning()) return { started: false, pid: this.child.pid };
+    if (this.starting) return this.starting;
+    this.starting = this.start(url);
+    try { return await this.starting; }
+    finally { this.starting = null; }
+  }
+
+  async start(url) {
+    if (!this.exists(this.chromePath)) throw new Error(this.chromeDiagnostic || `没有找到Chrome：${this.chromePath}`);
     fs.mkdirSync(this.profileDir, { recursive: true });
     const args = [
-      `--remote-debugging-port=${this.port}`,
-      '--remote-debugging-address=127.0.0.1',
+      '--remote-debugging-pipe',
       `--user-data-dir=${this.profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -123,36 +186,128 @@ class ChromeSession {
     ];
     if (this.headless) args.push('--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage');
     args.push(url);
-    const child = spawn(this.chromePath, args, {
-      detached: true,
-      stdio: 'ignore',
+    const child = this.spawnImpl(this.chromePath, args, {
+      detached: false,
+      // Chromium reserves fd 3 for commands and fd 4 for responses.
+      stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
       windowsHide: this.headless
     });
-    this.pid = child.pid;
-    child.unref();
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (await this.isRunning()) return { started: true, pid: child.pid };
-      await wait(200);
+    const input = child?.stdio?.[3];
+    const output = child?.stdio?.[4];
+    if (!child || !input || !output) throw codedError('BROWSER_CDP_PIPE_UNAVAILABLE', 'Chrome没有提供私有调试管道');
+    const connection = new CdpPipeConnection(input, output);
+    this.child = child;
+    this.connection = connection;
+    child.once('error', (error) => {
+      if (this.child === child) connection.fail(error);
+    });
+    child.once('exit', () => {
+      if (this.child !== child) return;
+      connection.fail(codedError('BROWSER_CDP_PIPE_CLOSED', 'Chrome私有调试管道已关闭'));
+      this.child = null;
+      this.connection = null;
+    });
+    let lastError = null;
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      try {
+        await connection.command('Browser.getVersion', {}, '', 600);
+        return { started: true, pid: child.pid };
+      } catch (error) {
+        lastError = error;
+        if (!connection.isOpen()) break;
+        await wait(200);
+      }
     }
-    throw new Error('Chrome启动失败或调试端口不可用');
+    this.stop();
+    throw codedError('BROWSER_CDP_PIPE_UNAVAILABLE', `Chrome启动失败或私有调试管道不可用：${lastError?.message || '未知错误'}`, lastError);
+  }
+
+  activeConnection() {
+    if (!this.isRunning()) throw codedError('BROWSER_CDP_PIPE_CLOSED', 'Chrome私有调试管道不可用');
+    return this.connection;
   }
 
   async listTabs() {
-    const response = await fetch(this.endpoint('/json/list'), { signal: AbortSignal.timeout(3000) });
-    if (!response.ok) throw new Error(`读取Chrome页面失败：HTTP ${response.status}`);
-    return response.json();
+    const result = await this.activeConnection().command('Target.getTargets', {}, '', 3000);
+    return (result.targetInfos || []).map((target) => ({ id: target.targetId, type: target.type, url: target.url, title: target.title, parentId: target.openerId || '' }));
   }
 
   async createTab(url) {
-    const response = await fetch(this.endpoint(`/json/new?${encodeURIComponent(url)}`), { method: 'PUT', signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`创建Chrome页面失败：HTTP ${response.status}`);
-    return response.json();
+    const result = await this.activeConnection().command('Target.createTarget', { url: String(url || 'about:blank') }, '', 5000);
+    return { id: result.targetId, type: 'page', url: String(url || 'about:blank') };
   }
 
   async closeTab(tabId) {
-    if (!tabId) return;
-    try { await fetch(this.endpoint(`/json/close/${encodeURIComponent(tabId)}`), { signal:AbortSignal.timeout(3000) }); } catch {}
+    if (!tabId || !this.isRunning()) return;
+    try { await this.connection.command('Target.closeTarget', { targetId: tabId }, '', 3000); } catch {}
   }
+
+  async connect(tab, clientFactory) {
+    const targetId = String(tab?.id || tab?.targetId || '');
+    if (!targetId) throw new Error('Chrome页面没有调试目标');
+    const connection = this.activeConnection();
+    const attached = await connection.command('Target.attachToTarget', { targetId, flatten: true }, '', 10000);
+    if (!attached.sessionId) throw new Error('Chrome页面没有私有调试会话');
+    const client = clientFactory(connection, attached.sessionId);
+    try {
+      // 采集器只主动调用 Page.navigate / Runtime.evaluate / captureScreenshot，
+      // 不依赖 Page.enable 或 Runtime.enable 推送的事件。把 enable 当作硬门槛会让
+      // 某些长时间运行的 SPA target 永久卡在握手阶段，因此仅做一次轻量读探针。
+      await client.command('Runtime.evaluate', { expression: '1 + 1', returnByValue: true }, 8000);
+      return client;
+    } catch (error) {
+      client.close();
+      throw codedError('BROWSER_TARGET_UNRESPONSIVE', `Chrome页面无响应：${error.message}`, error);
+    }
+  }
+
+  stop() {
+    const child = this.child;
+    const connection = this.connection;
+    this.child = null;
+    this.connection = null;
+    connection?.close();
+    if (!child) return;
+    // Only terminate the process tree started by this private pipe session.
+    try {
+      if (child.pid) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 8000 });
+      else child.kill?.();
+    } catch { try { child.kill?.(); } catch {} }
+  }
+}
+
+const PIPE_BROWSERS = new Map();
+
+class ChromeSession {
+  constructor({ chromePath, chromeDiagnostic = '', profileDir, headless = false, clientFactory, spawnImpl = spawn, exists = fs.existsSync }) {
+    this.chromePath = chromePath;
+    this.chromeDiagnostic = chromeDiagnostic;
+    this.profileDir = profileDir;
+    this.headless = headless;
+    this.clientFactory = clientFactory || ((connection, sessionId) => new CdpClient(connection, sessionId));
+    this.spawnImpl = spawnImpl;
+    this.exists = exists;
+    this.sessionKey = `${path.resolve(chromePath || '').toLowerCase()}|${path.resolve(profileDir || '').toLowerCase()}`;
+  }
+
+  browser() {
+    let browser = PIPE_BROWSERS.get(this.sessionKey);
+    if (!browser) {
+      browser = new PipeBrowser({ chromePath: this.chromePath, chromeDiagnostic: this.chromeDiagnostic, profileDir: this.profileDir, headless: this.headless, spawnImpl: this.spawnImpl, exists: this.exists });
+      PIPE_BROWSERS.set(this.sessionKey, browser);
+    }
+    return browser;
+  }
+
+  async isRunning() { return this.browser().isRunning(); }
+
+  async ensureStarted(url = 'about:blank') { return this.browser().ensureStarted(url); }
+
+  async listTabs() { return this.browser().listTabs(); }
+
+  async createTab(url) { return this.browser().createTab(url); }
+
+  async closeTab(tabId) { return this.browser().closeTab(tabId); }
 
   async getOrCreateTab(url, hostHint) {
     const tabs = await this.listTabs();
@@ -160,36 +315,18 @@ class ChromeSession {
     return existing || this.createTab(url);
   }
 
-  async connect(tab) {
-    if (!tab?.webSocketDebuggerUrl) throw new Error('Chrome页面没有调试连接地址');
-    const client = await this.clientFactory(tab.webSocketDebuggerUrl).open();
-    try {
-      // 采集器只主动调用 Page.navigate / Runtime.evaluate / captureScreenshot，
-      // 不依赖 Page.enable 或 Runtime.enable 推送的事件。把 enable 当作硬门槛会让
-      // 某些长时间运行的 SPA target 永久卡在握手阶段，因此仅做一次轻量读探针。
-      await client.command('Runtime.evaluate', { expression:'1 + 1', returnByValue:true }, 8000);
-      return client;
-    } catch (error) { client.close(); throw codedError('BROWSER_TARGET_UNRESPONSIVE', `Chrome页面无响应：${error.message}`, error); }
-  }
+  async connect(tab) { return this.browser().connect(tab, this.clientFactory); }
 
-  stopOwnedChromeProcesses() {
-    const profile = path.resolve(this.profileDir).replace(/'/g, "''");
-    const portToken = `--remote-debugging-port=${this.port}`.replace(/'/g, "''");
-    const script = `$profile='${profile}';$portToken='${portToken}';Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" -ErrorAction SilentlyContinue|Where-Object{$_.CommandLine -and $_.CommandLine.IndexOf($profile,[System.StringComparison]::OrdinalIgnoreCase)-ge 0 -and $_.CommandLine.IndexOf($portToken,[System.StringComparison]::OrdinalIgnoreCase)-ge 0}|ForEach-Object{Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue}`;
-    const encoded = Buffer.from(script, 'utf16le').toString('base64');
-    try { spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { windowsHide:true, stdio:'ignore', timeout:10000 }); } catch {}
-    this.pid = null;
-  }
+  stopOwnedChromeProcesses() { this.stop(); }
 
   async restartOwnedBrowser(url) {
     this.stop();
-    this.stopOwnedChromeProcesses();
     await wait(600);
     await this.ensureStarted(url);
   }
 
   // 三级恢复：复用现有页 -> 新建页 -> 仅重启本产品专用 Chrome。
-  // 最后一层同时覆盖“Chrome 是上一次服务启动的，因此当前 session 没有 pid”的情况。
+  // 最后一层同时覆盖浏览器由之前任务启动、但当前目标无响应的情况。
   async openClient(url, hostHint) {
     let lastError = null;
     const attempts = [];
@@ -199,10 +336,10 @@ class ChromeSession {
         if (attempt === 2) await this.restartOwnedBrowser(url);
         else await this.ensureStarted(url);
         tab = attempt === 0 ? await this.getOrCreateTab(url, hostHint) : await this.createTab(url);
-        return { tab, client:await this.connect(tab), recovered:attempt > 0, recoveryStage:attempt === 0 ? 'none' : attempt === 1 ? 'new_tab' : 'browser_restart' };
+        return { tab, client: await this.connect(tab), recovered: attempt > 0, recoveryStage: attempt === 0 ? 'none' : attempt === 1 ? 'new_tab' : 'browser_restart' };
       } catch (error) {
         lastError = error;
-        attempts.push({ stage:attempt === 0 ? 'existing_tab' : attempt === 1 ? 'new_tab' : 'browser_restart', code:error.code || '', message:error.message });
+        attempts.push({ stage: attempt === 0 ? 'existing_tab' : attempt === 1 ? 'new_tab' : 'browser_restart', code: error.code || '', message: error.message });
         if (tab?.id) await this.closeTab(tab.id);
       }
     }
@@ -230,13 +367,16 @@ class ChromeSession {
   }
 
   stop() {
-    if (!this.pid) return;
-    // Chrome 会派生渲染、GPU 等子进程。只杀主进程会让测试资料目录被锁住，
-    // 也可能在服务退出后留下一个仍占调试端口的采集器；仅终止本实例自己启动的 PID 树。
-    try { spawnSync('taskkill.exe', ['/PID', String(this.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 8000 }); }
-    catch { try { process.kill(this.pid); } catch {} }
-    this.pid = null;
+    const browser = PIPE_BROWSERS.get(this.sessionKey);
+    if (!browser) return;
+    PIPE_BROWSERS.delete(this.sessionKey);
+    browser.stop();
+  }
+
+  static shutdownAll() {
+    for (const browser of PIPE_BROWSERS.values()) browser.stop();
+    PIPE_BROWSERS.clear();
   }
 }
 
-module.exports = { ChromeSession, CdpClient, wait, codedError };
+module.exports = { ChromeSession, CdpClient, CdpPipeConnection, wait, codedError };

@@ -516,8 +516,8 @@ function navigationReached(targetUrl, before, after) {
 }
 
 class XiaohongshuCollector {
-  constructor({ chromePath, chromeDiagnostic, profileDir, errorDir, port = 17841, headless = false, searchBaseUrl, enrichDetails = true }) {
-    this.session = new ChromeSession({ chromePath, chromeDiagnostic, profileDir, port, headless });
+  constructor({ chromePath, chromeDiagnostic, profileDir, errorDir, headless = false, searchBaseUrl, enrichDetails = true }) {
+    this.session = new ChromeSession({ chromePath, chromeDiagnostic, profileDir, headless });
     this.errorDir = errorDir;
     this.searchBaseUrl = searchBaseUrl || 'https://www.xiaohongshu.com/search_result';
     this.enrichDetails = enrichDetails !== false;
