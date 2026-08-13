@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
@@ -42,10 +43,11 @@ internal static class ContentOpsWatchdog
             dataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ContentOpsAgentV2");
         if (!File.Exists(Node) || !File.Exists(ServerFile)) return;
 
-        string runningRoot;
-        if (TryGetHealthyRoot(out runningRoot))
+        string installId = InstallationId(Root);
+        string runningInstallId;
+        if (TryGetHealthyInstallId(out runningInstallId))
         {
-            if (!SameDirectory(runningRoot, Root)) return;
+            if (!SameInstallId(runningInstallId, installId)) return;
         }
         else
         {
@@ -57,9 +59,9 @@ internal static class ContentOpsWatchdog
         int consecutiveFailures = 0;
         while (true)
         {
-            if (TryGetHealthyRoot(out runningRoot))
+            if (TryGetHealthyInstallId(out runningInstallId))
             {
-                if (!SameDirectory(runningRoot, Root)) return;
+                if (!SameInstallId(runningInstallId, installId)) return;
                 consecutiveFailures = 0;
             }
             else
@@ -148,9 +150,9 @@ internal static class ContentOpsWatchdog
         return Int32.TryParse(json.Substring(start, end - start), out value) ? value : 0;
     }
 
-    private static bool TryGetHealthyRoot(out string runningRoot)
+    private static bool TryGetHealthyInstallId(out string runningInstallId)
     {
-        runningRoot = String.Empty;
+        runningInstallId = String.Empty;
         try
         {
             var request = (HttpWebRequest)WebRequest.Create(HealthUrl);
@@ -161,14 +163,14 @@ internal static class ContentOpsWatchdog
             {
                 string body = reader.ReadToEnd();
                 if (response.StatusCode != HttpStatusCode.OK || !body.Contains("contentops-agent-v2")) return false;
-                const string marker = "\"root\":\"";
+                const string marker = "\"installId\":\"";
                 int start = body.IndexOf(marker, StringComparison.Ordinal);
                 if (start < 0) return false;
                 start += marker.Length;
                 int end = body.IndexOf('"', start);
                 if (end < 0) return false;
-                runningRoot = body.Substring(start, end - start).Replace("\\\\", "\\");
-                return !String.IsNullOrWhiteSpace(runningRoot);
+                runningInstallId = body.Substring(start, end - start);
+                return !String.IsNullOrWhiteSpace(runningInstallId);
             }
         }
         catch { return false; }
@@ -194,6 +196,11 @@ internal static class ContentOpsWatchdog
         return Int32.TryParse(Environment.GetEnvironmentVariable("CONTENTOPS_PORT"), out parsed) && parsed >= 1025 && parsed <= 65535 ? parsed : DefaultPort;
     }
 
+    private static bool SameInstallId(string left, string right)
+    {
+        return !String.IsNullOrWhiteSpace(left) && String.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool SameDirectory(string left, string right)
     {
         try
@@ -201,5 +208,15 @@ internal static class ContentOpsWatchdog
             return Path.GetFullPath(left).TrimEnd('\\').Equals(Path.GetFullPath(right).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
         }
         catch { return false; }
+    }
+
+    private static string InstallationId(string directory)
+    {
+        string normalized = Path.GetFullPath(directory).TrimEnd('\\', '/').ToLowerInvariant();
+        using (var sha256 = SHA256.Create())
+        {
+            byte[] hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(normalized));
+            return BitConverter.ToString(hash).Replace("-", String.Empty).ToLowerInvariant();
+        }
     }
 }

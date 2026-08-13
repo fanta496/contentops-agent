@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -44,12 +45,13 @@ internal static class ContentOpsLauncher
                 return;
             }
 
-            string runningRoot;
-            bool healthy = TryGetHealthyRoot(out runningRoot);
+            string installId = InstallationId(root);
+            string runningInstallId;
+            bool healthy = TryGetHealthyInstallId(out runningInstallId);
             Process startedWatchdog = null;
             if (healthy)
             {
-                if (!SameDirectory(runningRoot, root))
+                if (!SameInstallId(runningInstallId, installId))
                 {
                     MessageBox.Show("本机 17851 端口已被另一套程序占用。为避免打开错误后台，本次不会继续启动。", "图文爆款Agent", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
@@ -227,13 +229,13 @@ internal static class ContentOpsLauncher
 
     private static bool IsHealthy()
     {
-        string root;
-        return TryGetHealthyRoot(out root);
+        string installId;
+        return TryGetHealthyInstallId(out installId) && SameInstallId(installId, InstallationId(AppDomain.CurrentDomain.BaseDirectory));
     }
 
-    private static bool TryGetHealthyRoot(out string runningRoot)
+    private static bool TryGetHealthyInstallId(out string runningInstallId)
     {
-        runningRoot = String.Empty;
+        runningInstallId = String.Empty;
         try
         {
             var request = (HttpWebRequest)WebRequest.Create(HealthUrl);
@@ -244,14 +246,14 @@ internal static class ContentOpsLauncher
             {
                 string body = reader.ReadToEnd();
                 if (response.StatusCode != HttpStatusCode.OK || !body.Contains("contentops-agent-v2")) return false;
-                const string marker = "\"root\":\"";
+                const string marker = "\"installId\":\"";
                 int start = body.IndexOf(marker, StringComparison.Ordinal);
                 if (start < 0) return false;
                 start += marker.Length;
                 int end = body.IndexOf('"', start);
                 if (end < 0) return false;
-                runningRoot = body.Substring(start, end - start).Replace("\\\\", "\\");
-                return !String.IsNullOrWhiteSpace(runningRoot);
+                runningInstallId = body.Substring(start, end - start);
+                return !String.IsNullOrWhiteSpace(runningInstallId);
             }
         }
         catch { return false; }
@@ -271,12 +273,18 @@ internal static class ContentOpsLauncher
         catch { return false; }
     }
 
-    private static bool SameDirectory(string left, string right)
+    private static bool SameInstallId(string left, string right)
     {
-        try
+        return !String.IsNullOrWhiteSpace(left) && String.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string InstallationId(string directory)
+    {
+        string normalized = Path.GetFullPath(directory).TrimEnd('\\', '/').ToLowerInvariant();
+        using (var sha256 = SHA256.Create())
         {
-            return Path.GetFullPath(left).TrimEnd('\\').Equals(Path.GetFullPath(right).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+            byte[] hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(normalized));
+            return BitConverter.ToString(hash).Replace("-", String.Empty).ToLowerInvariant();
         }
-        catch { return false; }
     }
 }

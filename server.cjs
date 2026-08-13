@@ -19,6 +19,7 @@ const APP_ID = 'contentops-agent-v2';
 const ROOT = __dirname;
 const SELF_TEST = process.argv.includes('--self-test');
 const PORT = Number(process.env.CONTENTOPS_PORT || (SELF_TEST ? 17832 : 17851));
+const INSTALL_ID = crypto.createHash('sha256').update(path.resolve(ROOT).replace(/[\\/]+$/, '').toLowerCase()).digest('hex');
 const SELF_TEST_DATA_DIR = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `self-test-${process.pid}`);
 const DATA_DIR = process.env.CONTENTOPS_DATA_DIR || (SELF_TEST ? SELF_TEST_DATA_DIR : path.join(process.env.APPDATA || os.homedir(), 'ContentOpsAgentV2'));
 const DATA_FILE = path.join(DATA_DIR, 'state.json');
@@ -32,6 +33,7 @@ const CHROME_RUNTIME = resolveChromeRuntime({ dataDir:DATA_DIR });
 const CHROME_PATH = CHROME_RUNTIME.path;
 const CREDENTIALS = new CredentialStore(DATA_DIR);
 const VISION_CREDENTIALS = new CredentialStore(DATA_DIR, 'vision-key.dpapi');
+const FEISHU_CREDENTIALS = new CredentialStore(DATA_DIR, 'feishu-webhook.dpapi');
 const IMAGE_REFERENCE_TEST_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATUlEQVR42u3PQQ0AAAgEILV/5zOFDzdoQCepz6aeExAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQELi3cqoDfaKuZM4AAAAASUVORK5CYII=', 'base64');
 const PROFILE_DIR = path.join(DATA_DIR, 'profiles');
 // normalizeState() runs during cold start and may inspect persisted model profiles.
@@ -67,7 +69,7 @@ function seedCandidate(item, index) {
 function initialState() {
   return {
     version: 2, mode: 'workflow-agent', createdAt: now(), lastSavedAt: now(),
-    settings: { masterEnabled: false, textProfiles: [], visionProfiles: [], imageProfiles: [], activeTextProfileId: '', activeVisionProfileId: '', activeImageProfileId: '', collectionEnabled: false, workflowAutoEnabled: false, autoMorningTime: '10:00', autoAfternoonTime: '17:00', lastAutomaticSlot: '', manualRawLimit: 50, automaticRawLimit: 200, manualFinalLimit: 10, automaticFinalLimit: 10, dailyCandidateLimit: 500, aiAnalysisLimit: 20, analysisConcurrency: 3, analysisAutoRetryCount: 2, creationAutoRetryCount: 2, generationCount: 10, scaleGenerationCount: 5, imageCount: 4, imageAspectRatio: '2:3', imageSize: '1024x1536', imageTextMode: 'free', imageStyle: 'realistic', imageMaxConcurrentJobs: 4, concurrencyProfileVersion: 1, imageQualityReviewEnabled: true, imageQualityThreshold: 78, imageAutoRetryCount: 1, imagePipelineVersion: 3, brandColors: [], mustShow: [], prohibitedElements: [], imageDailyBudget: 30, imageSpentToday: 0, imageCostPerImage: 0, dailyBudget: 30, spentToday: 0, visionDailyBudget: 30, visionSpentToday: 0, usageDate: DAY(), candidatesToday: 0, analysesToday: 0, generationsToday: 0, imageGenerationsToday: 0, xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['内容运营'], xhsMaxPerKeyword: 50, xhsScrollRounds: 2, xhsDelayMs: 2500, douyinDelayMs: 3500, xhsChromePort: 17841, douyinChromePort: 17842, performanceAutoEnabled: true, performanceSampleHours: [2, 24, 72], performanceAccountBaselineNotes: 12, performanceLastAutomaticSlot: '', performanceNextAttemptAt: '', performancePausedCode: '', performanceLastAlertKey: '', performanceLastAlertAt: '', feishuWebhook: '', aiBaseUrl: '', aiModel: '', aiInputPricePerMillion: 0, aiOutputPricePerMillion: 0, aiCredentialConfigured: false, lastAiCheckAt: '', lastAiCheckOk: false, visionBaseUrl: 'https://api.tu-zi.com', visionModel: '', visionInputPricePerMillion: 0, visionOutputPricePerMillion: 0, visionMaxImages: 12, visionCredentialConfigured: false, lastVisionCheckAt: '', lastVisionCheckOk: false },
+    settings: { masterEnabled: false, textProfiles: [], visionProfiles: [], imageProfiles: [], activeTextProfileId: '', activeVisionProfileId: '', activeImageProfileId: '', collectionEnabled: false, workflowAutoEnabled: false, autoMorningTime: '10:00', autoAfternoonTime: '17:00', lastAutomaticSlot: '', manualRawLimit: 50, automaticRawLimit: 200, manualFinalLimit: 10, automaticFinalLimit: 10, dailyCandidateLimit: 500, aiAnalysisLimit: 20, analysisConcurrency: 3, analysisAutoRetryCount: 2, creationAutoRetryCount: 2, generationCount: 10, scaleGenerationCount: 5, imageCount: 4, imageAspectRatio: '2:3', imageSize: '1024x1536', imageTextMode: 'free', imageStyle: 'realistic', imageMaxConcurrentJobs: 4, concurrencyProfileVersion: 1, imageQualityReviewEnabled: true, imageQualityThreshold: 78, imageAutoRetryCount: 1, imagePipelineVersion: 3, brandColors: [], mustShow: [], prohibitedElements: [], imageDailyBudget: 30, imageSpentToday: 0, imageCostPerImage: 0, dailyBudget: 30, spentToday: 0, visionDailyBudget: 30, visionSpentToday: 0, usageDate: DAY(), candidatesToday: 0, analysesToday: 0, generationsToday: 0, imageGenerationsToday: 0, xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['内容运营'], xhsMaxPerKeyword: 50, xhsScrollRounds: 2, xhsDelayMs: 2500, douyinDelayMs: 3500, xhsChromePort: 17841, douyinChromePort: 17842, performanceAutoEnabled: true, performanceSampleHours: [2, 24, 72], performanceAccountBaselineNotes: 12, performanceLastAutomaticSlot: '', performanceNextAttemptAt: '', performancePausedCode: '', performanceLastAlertKey: '', performanceLastAlertAt: '', feishuWebhookConfigured: false, aiBaseUrl: '', aiModel: '', aiInputPricePerMillion: 0, aiOutputPricePerMillion: 0, aiCredentialConfigured: false, lastAiCheckAt: '', lastAiCheckOk: false, visionBaseUrl: 'https://api.tu-zi.com', visionModel: '', visionInputPricePerMillion: 0, visionOutputPricePerMillion: 0, visionMaxImages: 12, visionCredentialConfigured: false, lastVisionCheckAt: '', lastVisionCheckOk: false },
     agents: [
       { id: 'orchestrator', name: '内容总管 Agent', type: '编排', status: 'idle', detail: '等待人工启动或下一次定时任务', lastHeartbeat: now(), restarts: 0 },
     { id: 'supervisor', name: '运行监控 Agent', type: '监控', status: 'healthy', detail: '全局心跳正常', lastHeartbeat: now(), restarts: 0 },
@@ -158,6 +160,12 @@ function normalizeState(loaded) {
   });
   next.settings.aiCredentialConfigured = CREDENTIALS.has();
   next.settings.visionCredentialConfigured = VISION_CREDENTIALS.has();
+  const legacyFeishuWebhook = safeText(next.settings.feishuWebhook, 2000);
+  if (legacyFeishuWebhook && feishuWebhookUrl(legacyFeishuWebhook) && !FEISHU_CREDENTIALS.has()) {
+    try { FEISHU_CREDENTIALS.save(legacyFeishuWebhook); } catch {}
+  }
+  delete next.settings.feishuWebhook;
+  next.settings.feishuWebhookConfigured = hasFeishuWebhook(next.settings);
   // 旧版单连接配置平滑迁移为档案。旧 Key 只在本机 DPAPI 存储中读取并复制，绝不写入 state.json。
   for (const kind of ['text', 'vision']) {
     const list = profileListFrom(next.settings, kind);
@@ -282,8 +290,10 @@ function addActivityTo(target, level, title, detail) { target.activity.unshift({
 function publicState() {
   const safe = structuredClone(state);
   delete safe.settings.aiApiKey;
+  delete safe.settings.feishuWebhook;
   safe.settings.aiCredentialConfigured = CREDENTIALS.has();
   safe.settings.visionCredentialConfigured = VISION_CREDENTIALS.has();
+  safe.settings.feishuWebhookConfigured = hasFeishuWebhook(state.settings);
   for (const kind of ['text', 'vision', 'image']) {
     const activeId = kind === 'vision' ? safe.settings.activeVisionProfileId : kind === 'image' ? safe.settings.activeImageProfileId : safe.settings.activeTextProfileId;
     profileListFrom(safe.settings, kind).forEach((profile) => {
@@ -324,6 +334,17 @@ function finiteNumber(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
 }
 function safeText(value, max = 500) { return String(value ?? '').trim().slice(0, max); }
 function promptText(value, max = 6000) { return String(value ?? '').slice(0, max); }
+function feishuWebhookUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return url.protocol === 'https:' && url.hostname === 'open.feishu.cn' && url.pathname.startsWith('/open-apis/bot/v2/hook/') ? url : null;
+  } catch { return null; }
+}
+function hasFeishuWebhook(settings = null) { return FEISHU_CREDENTIALS.has() || Boolean(settings?.feishuWebhook); }
+function getFeishuWebhook(settings = null) {
+  try { return FEISHU_CREDENTIALS.has() ? FEISHU_CREDENTIALS.read() : safeText(settings?.feishuWebhook, 2000); }
+  catch { return ''; }
+}
 function activeWorkflowReferencesCandidate(candidateId) { return state.workflowRuns.some((run) => ['preflight', 'queued', 'running', 'waiting_human'].includes(run.status) && run.candidateIds?.includes(candidateId)); }
 function activeWorkflowReferencesVariant(variant) {
   return state.workflowRuns.some((run) => ['preflight', 'queued', 'running', 'waiting_human'].includes(run.status) && (run.id === variant.workflowRunId || run.candidateIds?.includes(variant.candidateId)));
@@ -948,7 +969,7 @@ function matchCreatorRows(rows, variants) {
   return { matches, missing, ambiguous };
 }
 async function notifyPerformanceFailure(result) {
-  if (!state.settings.feishuWebhook) return;
+  if (!hasFeishuWebhook(state.settings)) return;
   const key = `${safeText(result.code, 80)}:${safeText(result.message, 400)}`;
   const lastAt = new Date(state.settings.performanceLastAlertAt || 0).getTime();
   if (state.settings.performanceLastAlertKey === key && Date.now() - lastAt < 60 * 60 * 1000) return;
@@ -1418,7 +1439,7 @@ async function resumeBlockedWorkflow() {
 }
 
 async function notifyCollectorFailure(result) {
-  if (!state.settings.feishuWebhook) return;
+  if (!hasFeishuWebhook(state.settings)) return;
   await sendFeishu(`【图文爆款Agent】${result.platform || '小红书'}采集已暂停：${result.message}${result.screenshot ? `\n截图：${result.screenshot}` : ''}`);
 }
 
@@ -1533,10 +1554,8 @@ function calculateDecision(m, baseline = {}, isFinal = false) {
 }
 
 async function sendFeishu(text) {
-  if (!state.settings.feishuWebhook) return { ok: false, message: '尚未配置飞书机器人 Webhook' };
-  let url;
-  try { url = new URL(state.settings.feishuWebhook); } catch { return { ok: false, message: '飞书 Webhook 格式不正确' }; }
-  if (url.protocol !== 'https:' || url.hostname !== 'open.feishu.cn' || !url.pathname.startsWith('/open-apis/bot/v2/hook/')) return { ok: false, message: '只允许官方飞书机器人 HTTPS Webhook' };
+  const url = feishuWebhookUrl(getFeishuWebhook(state.settings));
+  if (!url) return { ok: false, message: '尚未配置有效的飞书机器人 Webhook' };
   try { const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ msg_type: 'text', content: { text } }), signal: AbortSignal.timeout(10000) }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return { ok: true, message: '飞书消息已发送' }; }
   catch (error) { return { ok: false, message: `发送失败：${error.message}` }; }
 }
@@ -2232,12 +2251,12 @@ async function handleAction(route, body) {
     collectionLocks.set('小红书后台', task); try { return await task; } finally { collectionLocks.delete('小红书后台'); }
   }
   if (route === '/api/agent/restart') { const agent = state.agents.find((x) => x.id === body.id); if (!agent) return { ok: false, message: '未找到模块' }; if (agent.status === 'disabled') return { ok: false, message: '该模块尚未接入，不能伪装成已重启' }; if (agent.id === 'douyin-collector') { if (douyinBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'抖音专用浏览器正在执行另一项任务，暂时不能重新检查' }; agent.restarts++; const task=(async()=>{ try { const result = await withActiveCollector(createDouyinCollector, (collector) => collector.openLogin()); setAgent('douyin-collector', { status:'needs_login', detail:'抖音专用浏览器已打开；请完成登录或安全验证后，再按关键词测试采集', errorCode:'', screenshot:'' }); addActivity('info','重新检查 抖音抓取 Agent',result.message); saveState(); return result; } catch (error) { setAgent('douyin-collector',{ status:'warning', detail:error.message, errorCode:'BROWSER_START_FAILED' }); saveState(); return { ok:false, code:'BROWSER_START_FAILED', message:error.message }; } })(); collectionLocks.set('抖音登录',task); try { return await task; } finally { collectionLocks.delete('抖音登录'); } } if (['needs_login', 'verification_required'].includes(agent.status)) return { ok: false, message: '该状态需要人工登录或验证，系统不会自动绕过' }; agent.status = 'running'; agent.detail = '正在重新检查模块'; agent.restarts++; addActivity('warning', `检查 ${agent.name}`, '由运行监控执行'); saveState(); await sleep(450); agent.status = agent.id === 'xhs-collector' ? 'needs_login' : 'healthy'; agent.detail = agent.id === 'xhs-collector' ? '请通过“检查登录状态”快速确认，不必先跑完整采集' : '检查完成，心跳正常'; agent.lastHeartbeat = now(); saveState(); return { ok: true }; }
-  if (route === '/api/settings/save') { const imageRules = normalizeImageRules(body); const requestedAutomation = Boolean(body.workflowAutoEnabled ?? body.collectionEnabled); const automationEnabled = state.settings.masterEnabled && requestedAutomation; const next = { collectionEnabled: automationEnabled, workflowAutoEnabled: automationEnabled, xhsEnabled: Boolean(body.xhsEnabled), douyinEnabled: Boolean(body.douyinEnabled), xhsKeywords: normalizeKeywords(body.xhsKeywords), douyinKeywords: normalizeKeywords(body.douyinKeywords), xhsMaxPerKeyword: finiteNumber(body.xhsMaxPerKeyword, state.settings.xhsMaxPerKeyword, 1, 500), xhsScrollRounds: finiteNumber(body.xhsScrollRounds, state.settings.xhsScrollRounds, 0, 12), xhsDelayMs: finiteNumber(body.xhsDelayMs, state.settings.xhsDelayMs, 1000, 30000), douyinDelayMs: finiteNumber(body.douyinDelayMs, state.settings.douyinDelayMs, 1500, 30000), autoMorningTime: normalizeClock(body.autoMorningTime, state.settings.autoMorningTime), autoAfternoonTime: normalizeClock(body.autoAfternoonTime, state.settings.autoAfternoonTime), manualRawLimit: finiteNumber(body.manualRawLimit, state.settings.manualRawLimit, 30, 50), automaticRawLimit: finiteNumber(body.automaticRawLimit, state.settings.automaticRawLimit, 50, 500), manualFinalLimit: finiteNumber(body.manualFinalLimit, state.settings.manualFinalLimit, 1, 10), automaticFinalLimit: finiteNumber(body.automaticFinalLimit, state.settings.automaticFinalLimit, 1, 10), dailyCandidateLimit: finiteNumber(body.dailyCandidateLimit, state.settings.dailyCandidateLimit, 1, 100000), aiAnalysisLimit: finiteNumber(body.aiAnalysisLimit, state.settings.aiAnalysisLimit, 1, 100000), analysisConcurrency: finiteNumber(body.analysisConcurrency, state.settings.analysisConcurrency, 1, 5), analysisAutoRetryCount: finiteNumber(body.analysisAutoRetryCount, state.settings.analysisAutoRetryCount, 0, 3), generationCount: finiteNumber(body.generationCount, state.settings.generationCount, 1, 20), scaleGenerationCount: finiteNumber(body.scaleGenerationCount, state.settings.scaleGenerationCount, 1, 20), performanceAutoEnabled: body.performanceAutoEnabled !== false, performanceSampleHours: normalizePerformanceSampleHours(body.performanceSampleHours), performanceAccountBaselineNotes: finiteNumber(body.performanceAccountBaselineNotes, state.settings.performanceAccountBaselineNotes, 3, 100), imageCount: imageRules.imageCount, imageAspectRatio: imageRules.aspectRatio, imageSize: imageRules.size, imageTextMode: imageRules.textMode, imageStyle: imageRules.style, imageSingleTimeoutSeconds: Math.round(imageRules.singleTimeoutMs / 1000), imageJobTimeoutMinutes: Math.round(imageRules.jobTimeoutMs / 60000), imageMaxConcurrentJobs: imageRules.maxConcurrentJobs, imageQualityReviewEnabled: imageRules.qualityReviewEnabled, imageQualityThreshold: imageRules.qualityThreshold, imageAutoRetryCount: imageRules.autoRetryCount, imagePipelineVersion: 3, brandColors: imageRules.brandColors, mustShow: imageRules.mustShow, prohibitedElements: imageRules.prohibitedElements, imageDailyBudget: finiteNumber(body.imageDailyBudget, state.settings.imageDailyBudget, 0, 1000000), imageCostPerImage: finiteNumber(body.imageCostPerImage, state.settings.imageCostPerImage, 0, 1000000), dailyBudget: finiteNumber(body.dailyBudget, state.settings.dailyBudget, 0, 1000000), visionDailyBudget: finiteNumber(body.visionDailyBudget, state.settings.visionDailyBudget, 0, 1000000), visionMaxImages: finiteNumber(body.visionMaxImages, state.settings.visionMaxImages, 1, 20), feishuWebhook: safeText(body.feishuWebhook, 2000) };
+  if (route === '/api/settings/save') { const imageRules = normalizeImageRules(body); const requestedAutomation = Boolean(body.workflowAutoEnabled ?? body.collectionEnabled); const automationEnabled = state.settings.masterEnabled && requestedAutomation; const submittedFeishuWebhook = safeText(body.feishuWebhook, 2000); const clearFeishuWebhook = body.clearFeishuWebhook === true; if (submittedFeishuWebhook && !feishuWebhookUrl(submittedFeishuWebhook)) return { ok: false, message: '只允许官方飞书机器人 HTTPS Webhook' }; const next = { collectionEnabled: automationEnabled, workflowAutoEnabled: automationEnabled, xhsEnabled: Boolean(body.xhsEnabled), douyinEnabled: Boolean(body.douyinEnabled), xhsKeywords: normalizeKeywords(body.xhsKeywords), douyinKeywords: normalizeKeywords(body.douyinKeywords), xhsMaxPerKeyword: finiteNumber(body.xhsMaxPerKeyword, state.settings.xhsMaxPerKeyword, 1, 500), xhsScrollRounds: finiteNumber(body.xhsScrollRounds, state.settings.xhsScrollRounds, 0, 12), xhsDelayMs: finiteNumber(body.xhsDelayMs, state.settings.xhsDelayMs, 1000, 30000), douyinDelayMs: finiteNumber(body.douyinDelayMs, state.settings.douyinDelayMs, 1500, 30000), autoMorningTime: normalizeClock(body.autoMorningTime, state.settings.autoMorningTime), autoAfternoonTime: normalizeClock(body.autoAfternoonTime, state.settings.autoAfternoonTime), manualRawLimit: finiteNumber(body.manualRawLimit, state.settings.manualRawLimit, 30, 50), automaticRawLimit: finiteNumber(body.automaticRawLimit, state.settings.automaticRawLimit, 50, 500), manualFinalLimit: finiteNumber(body.manualFinalLimit, state.settings.manualFinalLimit, 1, 10), automaticFinalLimit: finiteNumber(body.automaticFinalLimit, state.settings.automaticFinalLimit, 1, 10), dailyCandidateLimit: finiteNumber(body.dailyCandidateLimit, state.settings.dailyCandidateLimit, 1, 100000), aiAnalysisLimit: finiteNumber(body.aiAnalysisLimit, state.settings.aiAnalysisLimit, 1, 100000), analysisConcurrency: finiteNumber(body.analysisConcurrency, state.settings.analysisConcurrency, 1, 5), analysisAutoRetryCount: finiteNumber(body.analysisAutoRetryCount, state.settings.analysisAutoRetryCount, 0, 3), generationCount: finiteNumber(body.generationCount, state.settings.generationCount, 1, 20), scaleGenerationCount: finiteNumber(body.scaleGenerationCount, state.settings.scaleGenerationCount, 1, 20), performanceAutoEnabled: body.performanceAutoEnabled !== false, performanceSampleHours: normalizePerformanceSampleHours(body.performanceSampleHours), performanceAccountBaselineNotes: finiteNumber(body.performanceAccountBaselineNotes, state.settings.performanceAccountBaselineNotes, 3, 100), imageCount: imageRules.imageCount, imageAspectRatio: imageRules.aspectRatio, imageSize: imageRules.size, imageTextMode: imageRules.textMode, imageStyle: imageRules.style, imageSingleTimeoutSeconds: Math.round(imageRules.singleTimeoutMs / 1000), imageJobTimeoutMinutes: Math.round(imageRules.jobTimeoutMs / 60000), imageMaxConcurrentJobs: imageRules.maxConcurrentJobs, imageQualityReviewEnabled: imageRules.qualityReviewEnabled, imageQualityThreshold: imageRules.qualityThreshold, imageAutoRetryCount: imageRules.autoRetryCount, imagePipelineVersion: 3, brandColors: imageRules.brandColors, mustShow: imageRules.mustShow, prohibitedElements: imageRules.prohibitedElements, imageDailyBudget: finiteNumber(body.imageDailyBudget, state.settings.imageDailyBudget, 0, 1000000), imageCostPerImage: finiteNumber(body.imageCostPerImage, state.settings.imageCostPerImage, 0, 1000000), dailyBudget: finiteNumber(body.dailyBudget, state.settings.dailyBudget, 0, 1000000), visionDailyBudget: finiteNumber(body.visionDailyBudget, state.settings.visionDailyBudget, 0, 1000000), visionMaxImages: finiteNumber(body.visionMaxImages, state.settings.visionMaxImages, 1, 20) };
     next.imagePipelineVersion = 3;
     // 保留旧 API 的兼容入口：历史自动化或已部署的调用方仍可传单套连接；新页面不会再写这些字段。
     if (Object.prototype.hasOwnProperty.call(body, 'aiBaseUrl')) Object.assign(next, { aiBaseUrl: safeText(body.aiBaseUrl, 1000), aiModel: safeText(body.aiModel, 120), aiInputPricePerMillion: finiteNumber(body.aiInputPricePerMillion, state.settings.aiInputPricePerMillion, 0, 100000), aiOutputPricePerMillion: finiteNumber(body.aiOutputPricePerMillion, state.settings.aiOutputPricePerMillion, 0, 100000) });
     if (Object.prototype.hasOwnProperty.call(body, 'visionBaseUrl')) Object.assign(next, { visionBaseUrl: safeText(body.visionBaseUrl, 1000), visionModel: safeText(body.visionModel, 120), visionInputPricePerMillion: finiteNumber(body.visionInputPricePerMillion, state.settings.visionInputPricePerMillion, 0, 100000), visionOutputPricePerMillion: finiteNumber(body.visionOutputPricePerMillion, state.settings.visionOutputPricePerMillion, 0, 100000) });
-    if (!next.xhsEnabled && !next.douyinEnabled) return { ok: false, message: '请至少启用一个采集平台' }; if (next.xhsEnabled && !next.xhsKeywords.length) return { ok: false, message: '请至少填写一个小红书关键词' }; if (next.douyinEnabled && !next.douyinKeywords.length) return { ok: false, message: '请至少填写一个抖音关键词' }; if (next.autoMorningTime === next.autoAfternoonTime) return { ok: false, message: '上午和下午自动运行时间不能相同' }; Object.assign(state.settings, next, { aiCredentialConfigured: CREDENTIALS.has(), visionCredentialConfigured: VISION_CREDENTIALS.has() }); const schedulingDetail = requestedAutomation && !automationEnabled ? '人工总控处于停止状态，本次只保存参数，24小时调度仍保持关闭' : '抓取目标、预算与调度将在下一任务生效；模型连接由档案独立管理'; addActivity('info', '系统设置已更新', schedulingDetail); saveState(); return { ok: true, automationEnabled, message: schedulingDetail }; }
+    if (!next.xhsEnabled && !next.douyinEnabled) return { ok: false, message: '请至少启用一个采集平台' }; if (next.xhsEnabled && !next.xhsKeywords.length) return { ok: false, message: '请至少填写一个小红书关键词' }; if (next.douyinEnabled && !next.douyinKeywords.length) return { ok: false, message: '请至少填写一个抖音关键词' }; if (next.autoMorningTime === next.autoAfternoonTime) return { ok: false, message: '上午和下午自动运行时间不能相同' }; try { if (submittedFeishuWebhook) FEISHU_CREDENTIALS.save(submittedFeishuWebhook); else if (clearFeishuWebhook) FEISHU_CREDENTIALS.clear(); } catch (error) { return { ok: false, message: error.message }; } Object.assign(state.settings, next, { aiCredentialConfigured: CREDENTIALS.has(), visionCredentialConfigured: VISION_CREDENTIALS.has(), feishuWebhookConfigured: hasFeishuWebhook(next) }); delete state.settings.feishuWebhook; const schedulingDetail = requestedAutomation && !automationEnabled ? '人工总控处于停止状态，本次只保存参数，24小时调度仍保持关闭' : '抓取目标、预算与调度将在下一任务生效；模型连接由档案独立管理'; addActivity('info', '系统设置已更新', schedulingDetail); saveState(); return { ok: true, automationEnabled, message: schedulingDetail }; }
   if (route === '/api/ai/credential/save') { try { CREDENTIALS.save(body.apiKey); state.settings.aiCredentialConfigured = true; state.settings.lastAiCheckOk = false; addActivity('success', 'AI 凭据已安全保存', '凭据由当前 Windows 用户加密，不写入业务状态'); saveState(); return { ok: true, message: 'API Key 已由 Windows 加密保存' }; } catch (error) { return { ok: false, message: error.message }; } }
   if (route === '/api/ai/credential/clear') { CREDENTIALS.clear(); state.settings.aiCredentialConfigured = false; state.settings.lastAiCheckOk = false; saveState(); return { ok: true }; }
   if (route === '/api/ai/test') { try { const prompt = '返回 {"ok":true,"message":"连接成功"}'; const reservation = reserveCall('text', prompt.length + 20, 100, '文本模型连接测试'); if (!reservation.ok) return reservation; const result = await callJson({ baseUrl: activeConnection('text').baseUrl, apiKey: activeConnection('text').apiKey, model: activeConnection('text').model, system: '你是连接测试助手，只返回 JSON。', prompt, temperature: 0, timeoutMs: 30000, maxOutputTokens: 100 }); state.settings.lastAiCheckAt = now(); state.settings.lastAiCheckOk = Boolean(result.data?.ok); state.settings.aiCredentialConfigured = CREDENTIALS.has(); recordAiUsage(result.usage, '文本模型连接测试'); addActivity(state.settings.lastAiCheckOk ? 'success' : 'warning', 'AI 接口连接测试', state.settings.lastAiCheckOk ? '模型接口可用' : '模型返回不符合预期'); saveState(); return { ok: state.settings.lastAiCheckOk, message: state.settings.lastAiCheckOk ? '模型 API 已联通' : '模型返回不符合预期' }; } catch (error) { state.settings.lastAiCheckAt = now(); state.settings.lastAiCheckOk = false; addActivity('warning', 'AI 接口连接失败', error.message); saveState(); return { ok: false, message: error.message }; } }
@@ -2253,6 +2272,10 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const STATIC_FILES = new Set(['index.html', 'styles.css', 'app.js']);
 function json(res, status, value) { const body = JSON.stringify(value); res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' }); res.end(body); }
 function bodyError(message, statusCode = 400) { const error = new Error(message); error.statusCode = statusCode; return error; }
+function isAllowedHost(value) {
+  const host = String(value || '').trim().toLowerCase();
+  return host === `${HOST}:${PORT}` || host === `localhost:${PORT}`;
+}
 function readBody(req, maxBytes = 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const declaredLength = Number(req.headers['content-length'] || 0);
@@ -2275,8 +2298,9 @@ function readBody(req, maxBytes = 1024 * 1024) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (!isAllowedHost(req.headers.host)) return json(res, 403, { ok: false, message: '主机被拒绝' });
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
-  if (url.pathname === '/health') return json(res, 200, { ok: true, appId: APP_ID, mode: state.mode, root: ROOT });
+  if (url.pathname === '/health') return json(res, 200, { ok: true, appId: APP_ID, mode: state.mode, installId: INSTALL_ID });
   if (url.pathname.startsWith('/api/')) {
     const origin = req.headers.origin;
     const allowedOrigins = [`http://${HOST}:${PORT}`, `http://localhost:${PORT}`];
@@ -2328,10 +2352,43 @@ server.listen(PORT, HOST, async () => {
   if (!SELF_TEST) return;
   // 离线自检显式开启总控，只覆盖测试进程；生产默认仍保持人工停止。
   try {
+    const request = (route, { method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
+      const payload = body === undefined ? null : JSON.stringify(body);
+      const client = http.request({ hostname: HOST, port: PORT, path: route, method, headers: { ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}), ...headers } }, (response) => {
+        let raw = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => { raw += chunk; });
+        response.on('end', () => {
+          try { resolve({ status: response.statusCode, body: raw ? JSON.parse(raw) : {} }); }
+          catch (error) { reject(error); }
+        });
+      });
+      client.on('error', reject);
+      if (payload) client.write(payload);
+      client.end();
+    });
+    const rejectedHost = await request('/api/state', { headers: { host: `untrusted.test:${PORT}` } });
+    if (rejectedHost.status !== 403) throw new Error('Host 白名单自检失败：未拒绝不受信任主机');
+    const health = await request('/health', { headers: { host: `${HOST}:${PORT}` } });
+    if (health.status !== 200 || health.body.installId !== INSTALL_ID || Object.prototype.hasOwnProperty.call(health.body, 'root')) throw new Error('健康检查隐私自检失败');
+    const localhostHealth = await request('/health', { headers: { host: `localhost:${PORT}` } });
+    if (localhostHealth.status !== 200 || localhostHealth.body.installId !== INSTALL_ID) throw new Error('localhost 健康检查兼容性自检失败');
+    const initialPublicState = await request('/api/state', { headers: { host: `${HOST}:${PORT}` } });
+    if (initialPublicState.status !== 200 || Object.prototype.hasOwnProperty.call(initialPublicState.body.settings || {}, 'feishuWebhook')) throw new Error('公开状态凭据隔离自检失败');
     const post = async (route, payload = {}) => {
       const response = await fetch(`http://${HOST}:${PORT}${route}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       return response.json();
     };
+    const testWebhook = new URL('/open-apis/bot/v2/hook/self-test', 'https://open.feishu.cn').href;
+    const savedWebhook = await post('/api/settings/save', { xhsEnabled:true, douyinEnabled:false, xhsKeywords:['内容运营'], feishuWebhook:testWebhook });
+    if (!savedWebhook.ok) throw new Error(`飞书 Webhook 保存自检失败：${savedWebhook.message}`);
+    const webhookPublicState = await request('/api/state', { headers: { host: `${HOST}:${PORT}` } });
+    if (!webhookPublicState.body.settings?.feishuWebhookConfigured || Object.prototype.hasOwnProperty.call(webhookPublicState.body.settings || {}, 'feishuWebhook')) throw new Error('飞书 Webhook 公开状态隔离自检失败');
+    if (fs.readFileSync(DATA_FILE, 'utf8').includes(testWebhook)) throw new Error('飞书 Webhook 明文状态文件自检失败');
+    const clearedWebhook = await post('/api/settings/save', { xhsEnabled:true, douyinEnabled:false, xhsKeywords:['内容运营'], clearFeishuWebhook:true });
+    if (!clearedWebhook.ok) throw new Error(`飞书 Webhook 清除自检失败：${clearedWebhook.message}`);
+    const clearedWebhookState = await request('/api/state', { headers: { host: `${HOST}:${PORT}` } });
+    if (clearedWebhookState.body.settings?.feishuWebhookConfigured) throw new Error('飞书 Webhook 清除状态自检失败');
     if (!process.env.CONTENTOPS_TEST_OVERRIDES) await post('/api/data/reset');
     // 数据重置会恢复默认的人工停止状态；自检必须在重置后显式开启总控。
     state.settings.masterEnabled = true;

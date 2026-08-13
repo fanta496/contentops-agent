@@ -32,9 +32,9 @@ function safeImageUrls(values, limit = 12, { allowTrustedTestImage = false, allo
       const trustedContentCdn = /(^|\.)xhscdn\.com$/i.test(url.hostname)
         || /(^|\.)douyinpic\.com$/i.test(url.hostname)
         || /(^|\.)byteimg\.com$/i.test(url.hostname);
-      if (!trustedContentCdn && !['127.0.0.1', 'localhost'].includes(url.hostname) && !trustedTestImage) continue;
+      if (!trustedContentCdn && !trustedTestImage) continue;
       if (/avatar/i.test(url.hostname + url.pathname)) continue;
-      if (url.protocol === 'http:' && !['127.0.0.1', 'localhost'].includes(url.hostname)) url.protocol = 'https:';
+      if (url.protocol === 'http:') url.protocol = 'https:';
       const normalized = url.href;
       if (!allowed.includes(normalized)) allowed.push(normalized);
     } catch {}

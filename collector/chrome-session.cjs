@@ -114,6 +114,7 @@ class ChromeSession {
     fs.mkdirSync(this.profileDir, { recursive: true });
     const args = [
       `--remote-debugging-port=${this.port}`,
+      '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${this.profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
