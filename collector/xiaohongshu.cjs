@@ -283,15 +283,18 @@ function extractionScript(limit) {
       if (results.length >= ${resultLimit}) break;
     }
     const loginSignals = ['扫码登录','手机号登录','登录后查看','请先登录','登录后浏览更多'];
-    const captchaSignals = ['安全验证','请完成验证','拖动滑块','验证码','异常访问'];
+    // 注意：不要用泛化的「验证码」做信号。未登录时的登录框必然出现「获取验证码」，
+    // 会被误判成安全验证，把「请先登录」报成「账号被风控」。
+    const captchaSignals = ['安全验证','请完成验证','拖动滑块','滑块验证','异常访问','验证码错误','行为异常'];
     const loginVisible = [...document.querySelectorAll('[class*="login"],[class*="Login"],[role="dialog"]')].some(visible);
+    const loginFormText = ['手机号登录','扫码登录','登录后查看','登录/注册'].some((text) => bodyText.includes(text));
     const captchaVisible = [...document.querySelectorAll('[class*="captcha"],[class*="geetest"],[class*="verify-dialog"],[class*="verification"],[id*="captcha"],iframe[src*="captcha"],iframe[src*="verify"]')].some(visible);
     return {
       url: location.href,
       title: document.title,
       results,
       requiresLogin: results.length === 0 && (loginVisible || loginSignals.some((text) => bodyText.includes(text))),
-      captcha: captchaVisible || (results.length === 0 && captchaSignals.some((text) => bodyText.includes(text))),
+      captcha: captchaVisible || (results.length === 0 && !loginFormText && captchaSignals.some((text) => bodyText.includes(text))),
       bodyExcerpt: bodyText.slice(0, 1000)
     };
   })()`;
