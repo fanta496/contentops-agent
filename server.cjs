@@ -1255,7 +1255,18 @@ async function runCollection(platform, { manual = false, workflowTrigger = manua
       if (!result.ok) { const status = result.code === 'MASTER_STOPPED' ? 'idle' : result.code === 'LOGIN_REQUIRED' ? 'needs_login' : result.code === 'CAPTCHA' ? 'verification_required' : 'warning'; setAgent('douyin-collector', { status, detail:result.message, errorCode:result.code, screenshot:result.screenshot || '' }); addActivity(result.code === 'MASTER_STOPPED' ? 'info' : 'warning', result.code === 'MASTER_STOPPED' ? '抖音采集已停止' : '抖音采集已暂停', result.message); saveState(); if (result.code !== 'MASTER_STOPPED') await notifyCollectorFailure({ ...result, platform:'抖音' }); return result; }
       const existingIds = new Set(state.candidates.filter((candidate) => candidate.platform === '抖音').map((candidate) => candidate.sourceId)); let allowance = Math.max(0, Number(state.settings.dailyCandidateLimit) - Number(state.settings.candidatesToday || 0));
       const accepted = result.items.filter((item) => existingIds.has(item.id) || allowance-- > 0); const summary = mergeDouyinCollectedItems(accepted); const filtered = Number(result.filterStats?.raw || 0) - Number(result.filterStats?.qualified || 0);
-      setAgent('douyin-collector', { status:'ready', detail:`最近采集：新增 ${summary.added} 条，更新 ${summary.updated} 条`, errorCode:'', screenshot:'' }); addActivity('success', '抖音采集完成', `${automatic ? '自动严格模式' : '手动标准模式'} · 原始 ${result.filterStats?.raw || 0} 条，淘汰 ${Math.max(0, filtered)} 条，入选 ${summary.total} 条`); saveState(); return { ok:true, ...summary, message:result.message || '', filtered:Math.max(0, filtered), enriched:accepted.length, filterStats:result.filterStats, warnings:result.warnings || [] };
+      // 一条卡片都没拿到，通常是短时间连续搜索触发的软限流（页面给空壳），
+      // 和「真的没有合格图文」要分开报，否则会误以为采集正常。
+      const throttled = !summary.added && !summary.updated && (result.warnings || []).some((warning) => warning.code === 'NO_RESULT_CARDS');
+      setAgent('douyin-collector', {
+        status: throttled ? 'warning' : 'ready',
+        detail: throttled ? '本轮没有拿到卡片，疑似被限流；建议间隔 10 分钟以上再试' : `最近采集：新增 ${summary.added} 条，更新 ${summary.updated} 条`,
+        errorCode: throttled ? 'NO_RESULT_CARDS' : '',
+        screenshot: ''
+      });
+      if (throttled) {
+        addActivity('warning', '抖音本轮没有拿到卡片', '页面返回空结果（不是验证码），通常是短时间连续搜索触发的限流，建议间隔十分钟以上再试');
+      } else addActivity('success', '抖音采集完成', `${automatic ? '自动严格模式' : '手动标准模式'} · 原始 ${result.filterStats?.raw || 0} 条，淘汰 ${Math.max(0, filtered)} 条，入选 ${summary.total} 条`); saveState(); return { ok:true, ...summary, message:result.message || '', filtered:Math.max(0, filtered), enriched:accepted.length, filterStats:result.filterStats, warnings:result.warnings || [] };
     })();
     collectionLocks.set(platform, task); try { return await task; } catch (error) { const result={ ok:false, code:'COLLECTOR_ERROR', message:error.message }; setAgent('douyin-collector',{ status:'warning', detail:error.message, errorCode:result.code }); saveState(); return result; } finally { collectionLocks.delete(platform); }
   }
