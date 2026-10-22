@@ -392,6 +392,30 @@ class DouyinCollector {
     return `https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=general`;
   }
 
+  // 首页 → 点搜索框 → 输入 → 回车。直接打开 /search/<关键词> 现在只拿到空壳页，
+  // 只有真实交互路径才会触发结果请求。
+  async searchByUi(client, keyword, shouldStop) {
+    if (!await this.navigateWithStop(client, 'https://www.douyin.com/', 900, shouldStop)) return false;
+    const target = await client.evaluate(`(() => {
+      const input = document.querySelector('input[data-e2e="searchbar-input"], input[placeholder*="搜索"], input[type="search"]');
+      if (!input) return null;
+      const box = input.getBoundingClientRect();
+      if (!box.width || !box.height) return null;
+      return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
+    })()`);
+    if (!target) return false;
+    await client.command('Input.dispatchMouseEvent', { type:'mousePressed', x:target.x, y:target.y, button:'left', clickCount:1 }, 8000).catch(() => {});
+    await client.command('Input.dispatchMouseEvent', { type:'mouseReleased', x:target.x, y:target.y, button:'left', clickCount:1 }, 8000).catch(() => {});
+    if (!await waitInterruptibly(350, shouldStop)) return false;
+    await client.evaluate(`(() => { const input = document.querySelector('input[data-e2e="searchbar-input"], input[placeholder*="搜索"], input[type="search"]'); if (input) { input.focus(); input.select && input.select(); } })()`).catch(() => {});
+    await client.command('Input.insertText', { text: keyword }, 8000).catch(() => {});
+    if (!await waitInterruptibly(250, shouldStop)) return false;
+    for (const type of ['keyDown', 'keyUp']) {
+      await client.command('Input.dispatchKeyEvent', { type, key:'Enter', code:'Enter', windowsVirtualKeyCode:13, nativeVirtualKeyCode:13 }, 8000).catch(() => {});
+    }
+    return waitInterruptibly(2600, shouldStop);
+  }
+
   async resolveClickTargets(client, searchUrl, targets, { delayMs = 1500, shouldStop, scrollTop = 0 } = {}) {
     const results = []; let unresolved = 0; let attempted = 0; let resolved = 0;
     // 图文详情是全屏弹层、URL 不变，拿不到 /note/<id>。
@@ -474,8 +498,27 @@ class DouyinCollector {
       if (!identity.id && detailCaptures.length) {
         const detail = detailCaptures.pop();
         const id = String(detail.aweme_id);
+        // 卡片的 title 经常是「粉丝367获赞1.7万」这类作者栏，不是笔记标题。
+        // 详情响应里有 desc / 作者 / 互动数，优先用它们。
+        const desc = String(detail.desc || '').replace(/\s+/g, ' ').trim();
+        const title = desc ? desc.slice(0, 80) : String(target.title || '');
+        const author = String(detail.author?.nickname || '').trim();
+        const stats = detail.statistics || {};
+        const likes = Number(stats.digg_count ?? NaN);
+        const images = Array.isArray(detail.images) ? detail.images : [];
+        const coverFromDetail = images[0]?.url_list?.[0] || detail.video?.cover?.url_list?.[0] || '';
         resolved += 1;
-        results.push({ id, url: `${this.detailBaseUrl}/note/${id}`, title: target.title || String(detail.desc || '').slice(0, 80), rawText: target.rawText, coverUrl: target.coverUrl, fromDetailApi: true });
+        results.push({
+          id,
+          url: `${this.detailBaseUrl}/note/${id}`,
+          title,
+          rawText: desc ? [desc] : (target.rawText || []),
+          coverUrl: coverFromDetail || target.coverUrl,
+          author,
+          likes: Number.isFinite(likes) ? likes : undefined,
+          imageCount: images.length,
+          fromDetailApi: true
+        });
       } else
       if (identity.id && !identity.conflict) { resolved += 1; results.push({ id:identity.id, url:currentUrl, title:target.title, rawText:target.rawText, coverUrl:target.coverUrl, isVideo:/\/video\//.test(currentUrl), hasImageHint:target.hasImageHint, resolvedFromClick:true }); }
       else unresolved += 1;
@@ -513,6 +556,9 @@ class DouyinCollector {
         const keywordResults=[]; const keywordIds=new Set(); const processedTargets=new Set();
         let noProgressPasses=0; const maxPasses=Math.max(3, Math.min(60, Math.ceil(keywordRawGoal / 4) + 6));
         for (let pass=0; pass<maxPasses && keywordResults.length<keywordRawGoal; pass+=1) {
+        if (pass === 0 && !keywordResults.length && await this.searchByUi(client, keyword, shouldStop)) {
+          onProgress?.({ keyword, index, total:normalized.length, stage:'scan', pass:1, count:0, target:keywordRawGoal });
+        }
           if (shouldStop?.()) return { ok:false, code:'MASTER_STOPPED', message:'人工总控已停止，抖音采集已中断' };
           const page = await client.evaluate(searchScript(Math.min(100, Math.max(8, keywordRawGoal - keywordResults.length + 4))));
           if (page.captcha) return { ok:false, code:'CAPTCHA', message:'抖音要求安全验证，已停止采集，请人工处理', screenshot:await this.captureFailure(client, 'captcha') };
