@@ -11,7 +11,7 @@
 - **支持 Edge 等 Chromium 浏览器**：本机没装 Google Chrome 时，可以在首次环境检查里选 Edge，
   采集器用同一个私有调试管道工作。解析顺序为 `CONTENTOPS_CHROME_PATH` → 启动器保存的路径 → 标准安装路径（Chrome、Edge）。
 - **一条命令自检**：`npm test` 依次跑语法检查、安全回归、采集器契约、浏览器路径解析、
-  接口行为快照、离线自检，共 35 项。
+  接口行为快照、升级兼容、隐私检查、静态契约检查、离线自检，共 45 项。
 - **接口行为基线**：`tests/baseline/api-smoke.json` 记录 60 个请求的响应，重构时用它锁行为。
 - **平台注册表**：`lib/platforms.cjs` 集中描述平台标签、Agent、设置字段与采集器路径。
 - **架构文档**：`docs/ARCHITECTURE.md`，含请求链路、ctx 契约、加接口/加平台的改动清单。

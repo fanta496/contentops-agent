@@ -41,7 +41,7 @@ npm start          # 等价于 node server.cjs
 模块划分、请求链路、加接口/加平台的改动清单见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)；版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ```powershell
-npm test          # 35 项检查：语法 + 安全回归 + 采集器契约 + 浏览器路径 + 接口快照 + 离线自检
+npm test          # 45 项检查：语法 / 安全回归 / 采集器契约 / 浏览器路径 / 接口快照 / 升级兼容 / 隐私 / 静态契约 / 离线自检
 npm start         # 等价于 node server.cjs
 ```
 

@@ -61,6 +61,7 @@ run('模块依赖审计 tests/module-refs.cjs', process.execPath, [path.join(ROO
 run('隐私检查 tests/privacy.cjs', process.execPath, [path.join(ROOT, 'tests', 'privacy.cjs')]);
 run('ctx 契约 tests/ctx-contract.cjs', process.execPath, [path.join(ROOT, 'tests', 'ctx-contract.cjs')]);
 run('容器引用 tests/container-refs.cjs', process.execPath, [path.join(ROOT, 'tests', 'container-refs.cjs')]);
+run('启动退出码 tests/startup-exit.cjs', process.execPath, [path.join(ROOT, 'tests', 'startup-exit.cjs')]);
 run('离线自检 server.cjs --self-test', process.execPath, [path.join(ROOT, 'server.cjs'), '--self-test'], {
   env: { CONTENTOPS_CARD_RENDERER: path.join(ROOT, 'launcher', 'bin', 'CardRenderer.exe') }
 });

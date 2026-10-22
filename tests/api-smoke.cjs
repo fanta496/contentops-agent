@@ -21,7 +21,7 @@ const { spawn } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '..');
 const BASELINE = path.join(__dirname, 'baseline', 'api-smoke.json');
 const WRITE = process.argv.includes('--write');
-const PORT = 17800 + (process.pid % 150);
+const PORT = 17800 + (process.pid % 120);
 const DATA_DIR = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `api-smoke-${process.pid}`);
 
 // 顺序固定：先只读，再逐个 POST。真实采集和浏览器动作全部由“总控停止”挡在门口，
@@ -101,6 +101,9 @@ function normalize(value) {
       text = text.replace(/\b[0-9a-f]{64}\b/g, '<sha256>');
       text = text.replace(/[A-Za-z]:\\\\?[^"']*/g, '<path>');
       text = text.replace(/\d{2}:\d{2}:\d{2}/g, '<clock>');
+      // 只有日期的字段（usageDate、lastAutomaticSlot 之外的一切 YYYY-MM-DD）也必须归一化，
+      // 否则基线会在第二天失效 —— 这类"日期敏感"失败最容易被当成真 bug。
+      text = text.replace(/\b\d{4}-\d{2}-\d{2}\b/g, '<date>');
       return text;
     }
     if (typeof raw === 'number' && Number.isInteger(raw) && raw > 1e12) return '<epochms>';
