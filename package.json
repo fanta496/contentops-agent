@@ -1,0 +1,20 @@
+{
+  "name": "contentops-agent",
+  "version": "1.4.6",
+  "private": true,
+  "description": "本地图文内容增长工作流：采集、分析、生产、审核、发布后观察",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "server.cjs",
+  "scripts": {
+    "start": "node server.cjs",
+    "self-test": "node server.cjs --self-test",
+    "build:launchers": "powershell -NoProfile -ExecutionPolicy Bypass -File launcher/build.ps1",
+    "test": "node tests/run-all.cjs",
+    "test:security": "node tests/security-regression.cjs",
+    "test:api": "node tests/api-smoke.cjs",
+    "test:baseline": "node tests/api-smoke.cjs --write"
+  }
+}

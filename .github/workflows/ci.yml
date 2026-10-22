@@ -16,13 +16,9 @@ jobs:
         run: |
           node --check app.js
           node --check server.cjs
-      - name: Security regression checks
-        run: node tests/security-regression.cjs
       - name: Build Windows launchers
         shell: powershell
         run: .\launcher\build.ps1
-      - name: Isolated server self-test
+      - name: Full check (security + API snapshot + self-test)
         shell: powershell
-        run: |
-          $env:CONTENTOPS_CARD_RENDERER = (Resolve-Path .\launcher\bin\CardRenderer.exe)
-          node server.cjs --self-test
+        run: node tests/run-all.cjs

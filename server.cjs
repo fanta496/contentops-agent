@@ -14,6 +14,8 @@ const { callVisionJson, VISION_TEST_IMAGE_URL } = require('./ai/vision-compatibl
 const { generateImage } = require('./ai/image-compatible.cjs');
 const { SYSTEM, candidateTextAnalysisPrompt, candidateVisionPrompt, candidateSynthesisPrompt, generationPrompt, imageQualityPrompt, performancePrompt } = require('./ai/prompts.cjs');
 const { CredentialStore } = require('./ai/credential-store.cjs');
+const { clamp, sleep, now, uid, finiteNumber, safeText, promptText, localDay, localClock, normalizeClock, normalizeKeywords, normalizeTextList } = require('./lib/util.cjs');
+const { detectImageMime, imageBytesMatchMime, imageExtension } = require('./lib/media.cjs');
 
 const HOST = '127.0.0.1';
 const APP_ID = 'contentops-agent-v2';
@@ -49,9 +51,6 @@ const ENTERPRISE_ASSET_DIR = path.join(DATA_DIR, 'enterprise-assets');
 const TEST_ENTERPRISE_IMAGE_BYPASS = process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED === '1' && process.env.CONTENTOPS_TEST_BYPASS_ENTERPRISE_IMAGE_GATE === '1' && [path.basename(DATA_DIR), path.basename(path.dirname(DATA_DIR))].some((name) => name.startsWith('ContentOpsAgentV2-QA-'));
 const DAY = () => localDay();
 
-const now = () => new Date().toISOString();
-const uid = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 function cleanupSelfTestData() { if (SELF_TEST && !process.env.CONTENTOPS_DATA_DIR) try { fs.rmSync(SELF_TEST_DATA_DIR, { recursive: true, force: true }); } catch {} }
 
 // 只用于 --self-test 的离线自检数据，生产运行永远不会写入业务状态。
@@ -319,7 +318,6 @@ function publicState() {
 }
 function addActivity(level, title, detail) { state.activity.unshift({ id: uid('log'), level, title, detail, at: now() }); state.activity = state.activity.slice(0, 120); }
 function setAgent(id, patch) { const agent = state.agents.find((item) => item.id === id); if (agent) Object.assign(agent, patch, { lastHeartbeat: now() }); }
-function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function resetDailyUsageIfNeeded() {
   if (state.settings.usageDate === DAY()) return;
   state.settings.usageDate = DAY();
@@ -332,12 +330,6 @@ function resetDailyUsageIfNeeded() {
   state.settings.imageGenerationsToday = 0;
   addActivity('info', '每日额度已重置', '候选、分析、生成和预算计数从零开始');
 }
-function finiteNumber(value, fallback, min = 0, max = Number.MAX_SAFE_INTEGER) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? clamp(parsed, min, max) : fallback;
-}
-function safeText(value, max = 500) { return String(value ?? '').trim().slice(0, max); }
-function promptText(value, max = 6000) { return String(value ?? '').slice(0, max); }
 function feishuWebhookUrl(value) {
   try {
     const url = new URL(String(value || '').trim());
@@ -380,14 +372,6 @@ function deleteCandidateRecords(candidateIds) {
   state.candidates = state.candidates.filter((item) => !ids.has(item.id));
   state.workflowRuns.forEach((run) => { run.candidateIds = (run.candidateIds || []).filter((id) => !ids.has(id)); });
   return { candidatesDeleted:before - state.candidates.length, variantsDeleted:variantResult.deleted, generatedFiles:variantResult.generatedFiles };
-}
-function normalizeKeywords(value) {
-  const source = Array.isArray(value) ? value : String(value || '').split(/[\r\n,，]+/);
-  return [...new Set(source.map((item) => safeText(item, 60)).filter(Boolean))].slice(0, 30);
-}
-function normalizeTextList(value, maxItems = 30, maxLength = 300) {
-  const source = Array.isArray(value) ? value : String(value || '').split(/[\r\n]+/);
-  return [...new Set(source.map((item) => safeText(item, maxLength)).filter(Boolean))].slice(0, maxItems);
 }
 function normalizeImageRules(value = {}) {
   // OpenAI-compatible Images APIs expose fixed canvases. Keep the label, pixel
@@ -477,15 +461,6 @@ function enterpriseAssetPath(file) {
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('参考图片文件路径不正确');
   return resolved;
 }
-function detectImageMime(bytes) {
-  if (!Buffer.isBuffer(bytes) || !bytes.length) return '';
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
-  return '';
-}
-function imageBytesMatchMime(bytes, mime) { return detectImageMime(bytes) === mime; }
-function imageExtension(mime) { return mime === 'image/jpeg' ? '.jpg' : mime === 'image/webp' ? '.webp' : '.png'; }
 function stageEnterpriseImageRemoval(asset) {
   const source = enterpriseAssetPath(asset.file);
   const stat = fs.statSync(source);
@@ -574,10 +549,6 @@ function exportEnterpriseProfile(profile, directory) {
   if (!SELF_TEST && !process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED && process.env.CONTENTOPS_OPEN_EXPORT_FOLDER !== '0') try { spawn('explorer.exe', [folder], { detached:true, stdio:'ignore' }).unref(); } catch {}
   return { ok:true, path:folder, imageCount:assets.length, warning: state === beforeLog ? '快照已生成，但运行日志未能保存；无需重复导出。' : '' };
 }
-function normalizeClock(value, fallback) {
-  const match = String(value || '').trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
-  return match ? `${match[1].padStart(2, '0')}:${match[2]}` : fallback;
-}
 function normalizePerformanceSampleHours(value) {
   const source = Array.isArray(value) ? value : String(value || '').split(/[\s,，]+/);
   const defaults = [2, 24, 72];
@@ -607,8 +578,6 @@ function normalizePerformanceSnapshot(value = {}, source = 'creator_center') {
 function performanceMetricsFromSnapshot(snapshot) {
   return { source:snapshot.source, exposure: snapshot.exposure, likes: snapshot.likes, saves: snapshot.saves, comments: snapshot.comments, shares: snapshot.shares, followers: snapshot.followers, coverClickRate: snapshot.coverClickRate, views: snapshot.views, averageViewSeconds: snapshot.averageViewSeconds, link: snapshot.link, recordedAt: snapshot.capturedAt };
 }
-function localDay(date = new Date()) { return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }); }
-function localClock(date = new Date()) { return date.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit' }); }
 function automaticSlots() { return [state.settings.autoMorningTime, state.settings.autoAfternoonTime].map((value) => normalizeClock(value, '10:00')).sort(); }
 function dueAutomaticSlot(date = new Date()) { const clock = localClock(date); return automaticSlots().filter((slot) => slot <= clock).at(-1) || ''; }
 function nextAutomaticRunAt(date = new Date()) {
@@ -2005,93 +1974,13 @@ function exportVariant(item) {
 }
 
 async function handleAction(route, body) {
+  ensureActionRoutes();
+  const ctx = actionContext;
   const profileKind = (value) => ['text', 'vision', 'image'].includes(value) ? value : 'text';
   const activeProfileKey = (kind) => kind === 'vision' ? 'activeVisionProfileId' : kind === 'image' ? 'activeImageProfileId' : 'activeTextProfileId';
-  if (route === '/api/model-profile/save') { const kind = profileKind(body.kind); const list = profileList(kind); const prior = list.find((item) => item.id === safeText(body.id, 120)); const profile = profileShape(kind, body, prior); if (!profile.baseUrl || !profile.model) return { ok: false, message: '连接档案必须填写接口地址和模型名称' }; const keyChanged = Boolean(body.apiKey); const changed = keyChanged || !prior || ['baseUrl', 'model', 'protocol', 'imageInputMode'].some((key) => prior[key] !== profile[key]); if (changed) { profile.lastTestOk = false; profile.lastTestAt = ''; profile.lastTestError = ''; } if (prior) Object.assign(prior, profile); else list.push(profile); const store = profileCredentialStore(kind, profile.id); if (body.apiKey) store.save(body.apiKey); if (state.settings[activeProfileKey(kind)] === profile.id && changed) { if (kind === 'vision') state.settings.lastVisionCheckOk = false; else if (kind === 'text') state.settings.lastAiCheckOk = false; } addActivity('info', prior ? '模型连接档案已更新' : '模型连接档案已创建', `${profile.name} · ${profile.model}`); saveState(); return { ok: true, profile: { ...profile, credentialConfigured: store.has() } }; }
-  if (route === '/api/model-profile/test') { const kind = profileKind(body.kind); const profile = profileList(kind).find((item) => item.id === safeText(body.id, 120)); if (!profile) return { ok: false, message: '未找到连接档案' }; const store = profileCredentialStore(kind, profile.id); if (body.apiKey) { store.save(body.apiKey); profile.lastTestOk = false; } if (!store.has()) return { ok: false, message: '该连接档案尚未保存 Key' }; const isActive = profile.id === state.settings[activeProfileKey(kind)]; try { const timeoutMs = finiteNumber(profile.requestTimeoutSeconds, kind === 'image' ? 180 : 120, 10, 1800) * 1000; const result = kind === 'vision' ? await callVisionJson({ baseUrl: profile.baseUrl, apiKey: store.read(), model: profile.model, prompt: '观察测试图片，只返回严格的 json object：{"ok":true,"message":"连接成功"}', imageUrls: [VISION_TEST_IMAGE_URL], allowTrustedTestImage: true, maxOutputTokens: Math.min(profile.maxOutputTokens, 200), timeoutMs }) : kind === 'image' ? await generateImage({ baseUrl: profile.baseUrl, apiKey: store.read(), model: profile.model, inputMode:profile.imageInputMode, referenceImages:profile.imageInputMode !== 'text_only' ? [{ bytes:IMAGE_REFERENCE_TEST_PNG, mime:'image/png', name:'reference-capability-test.png' }] : [], prompt:profile.imageInputMode !== 'text_only' ? '基于上传的测试参考图生成纯白背景图片，无文字，无水印' : '一张纯白背景上的黑色圆点，无文字，无水印', size: '1024x1024', timeoutMs }) : await callJson({ baseUrl: profile.baseUrl, apiKey: store.read(), model: profile.model, system: '只返回 json object。', prompt: '返回严格的 json object：{"ok":true,"message":"连接成功"}', maxOutputTokens: Math.min(profile.maxOutputTokens, 200), timeoutMs }); if (kind === 'image' && result.url && !result.b64) { const remote = new URL(result.url); if (remote.protocol !== 'https:') throw new Error('生图供应商返回的图片 URL 必须使用 HTTPS'); const imageResponse = await fetch(remote, { signal: AbortSignal.timeout(timeoutMs) }); if (!imageResponse.ok) throw new Error(`生图供应商返回的图片 URL 无法下载：HTTP ${imageResponse.status}`); const bytes = await imageResponse.arrayBuffer(); if (!bytes.byteLength || bytes.byteLength > 25 * 1024 * 1024) throw new Error('生图供应商返回的图片为空或超过 25MB 安全上限'); } profile.lastTestAt = now(); profile.lastTestOk = kind === 'image' ? Boolean(result.b64 || result.url) : Boolean(result.data?.ok); profile.lastTestError = profile.lastTestOk ? '' : kind === 'image' ? '该供应商没有返回 b64_json 或 HTTPS 图片 URL，不能用于本地保存与导出。' : '模型返回不符合预期'; profile.updatedAt = now(); if (isActive) { if (kind === 'vision') state.settings.lastVisionCheckOk = profile.lastTestOk; else if (kind === 'text') state.settings.lastAiCheckOk = profile.lastTestOk; } saveState(); return { ok: profile.lastTestOk, message: profile.lastTestOk ? '连接测试成功，可启用此档案' : profile.lastTestError, usage: result.usage }; } catch (error) { profile.lastTestAt = now(); profile.lastTestOk = false; profile.lastTestError = error.message; if (isActive) { if (kind === 'vision') state.settings.lastVisionCheckOk = false; else if (kind === 'text') state.settings.lastAiCheckOk = false; } saveState(); return { ok: false, message: error.message }; } }
-  if (route === '/api/model-profile/activate') { const kind = profileKind(body.kind); const profile = profileList(kind).find((item) => item.id === safeText(body.id, 120)); if (!profile) return { ok: false, message: '未找到连接档案' }; if (!profile.lastTestOk) return { ok: false, message: '连接档案必须先测试成功才能启用' }; const store = profileCredentialStore(kind, profile.id); if (!store.has()) return { ok: false, message: '连接档案缺少 Key' }; applyProfile(kind, profile); state.settings[activeProfileKey(kind)] = profile.id; addActivity('success', '模型连接档案已启用', `${profile.name} · ${profile.model}`); saveState(); return { ok: true, profile }; }
+
   if (route === '/api/master/start') { if (!analysisReady() && !(SELF_TEST && aiReady() && visionReady()) && process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED !== '1') return { ok: false, code: 'ANALYSIS_NOT_READY', message: '请先保存并分别测试文本模型与视觉模型 Key' }; state.settings.masterEnabled = true; masterGeneration += 1; addActivity('success', '人工总控已开始', '允许手动工作流和24小时调度执行'); setAgent('orchestrator', { status: 'idle', detail: '人工总控已开启，等待启动工作流' }); if (state.agents.find((item) => item.id === 'analyst')?.status === 'idle') setAgent('analyst', { status:'healthy', detail:'评分队列为空' }); if (state.agents.find((item) => item.id === 'creator')?.status === 'idle') setAgent('creator', { status:'idle', detail:'等待人工选款' }); saveState(); return { ok: true }; }
   if (route === '/api/master/stop') { state.settings.masterEnabled = false; state.settings.workflowAutoEnabled = false; state.settings.collectionEnabled = false; masterGeneration += 1; let cancelledRuns = 0; for (const run of state.workflowRuns) if (cancelOpenRun(run)) cancelledRuns += 1; for (const candidate of state.candidates.filter((item) => ['text_analyzing','vision_analyzing','synthesizing'].includes(item.analysisStatus))) candidate.analysisStatus = 'pending'; setAgent('orchestrator', { status: 'idle', detail: '人工总控已停止，所有未结束任务均已取消' }); setAgent('analyst', { status: 'idle', detail: '人工总控已停止' }); setAgent('creator', { status: 'idle', detail: '人工总控已停止' }); for (const [agentId, detail] of [['xhs-collector', '人工总控已停止，当前抓取结果将被丢弃'], ['douyin-collector', '人工总控已停止，当前抓取结果将被丢弃'], ['data-agent', '人工总控已停止，当前后台数据结果将被丢弃']]) if (state.agents.find((item) => item.id === agentId)?.status === 'running') setAgent(agentId, { status: 'idle', detail }); const message = `已关闭24小时调度并取消${cancelledRuns}个未结束任务；在途网络结果不会写入`; addActivity('warning', '人工总控已停止', message); saveState(); return { ok: true, cancelledRuns, message }; }
-  if (route === '/api/enterprise-profile/save') {
-    const mode = body.mode === 'edit' ? 'edit' : 'create';
-    const requestedId = safeText(body.id, 120);
-    if (mode === 'create' && requestedId) return { ok: false, message: '新建资料库不能携带已有资料库标识，请关闭窗口后重新新建' };
-    if (mode === 'edit' && !requestedId) return { ok: false, message: '编辑资料库缺少标识，请重新打开该资料库后保存' };
-    const incoming = normalizeEnterpriseProfile(mode === 'create' ? { ...body, id: '', imageAssets:[] } : body);
-    if (!incoming.name) return { ok: false, message: '请填写资料库名称' };
-    const next = structuredClone(state); const existing = mode === 'edit' ? next.enterpriseProfiles.find((item) => item.id === incoming.id) : null;
-    if (mode === 'edit' && !existing) return { ok: false, message: '未找到要编辑的资料库；为保护原有资料，系统没有新建或覆盖任何资料库' };
-    if (existing) Object.assign(existing, incoming, { createdAt: existing.createdAt, imageAssets: existing.imageAssets, status: existing.status });
-    else next.enterpriseProfiles.unshift(incoming);
-    const savedProfile = existing || incoming;
-    if ((!next.activeEnterpriseProfileId || body.makeActive === true) && savedProfile.status === 'active') next.activeEnterpriseProfileId = savedProfile.id;
-    addActivityTo(next, existing ? 'info' : 'success', existing ? '项目资料库已更新' : '项目资料库已创建', `${incoming.name} · ${incoming.brandName || incoming.productName}`);
-    const committed = commitStateSnapshot(next); const persisted = committed.enterpriseProfiles.find((item) => item.id === savedProfile.id);
-    return { ok: true, profile: persisted, active: committed.activeEnterpriseProfileId === savedProfile.id };
-  }
-  if (route === '/api/enterprise-profile/export') {
-    const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.profileId, 120));
-    if (!profile) return { ok:false, message:'未找到项目资料库' };
-    return exportEnterpriseProfile(profile, body.directory);
-  }
-  if (route === '/api/enterprise-image/upload') {
-    const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.profileId, 120) && item.status === 'active');
-    if (!profile) return { ok:false, message:'请先选择一个有效的项目资料库' };
-    const mime = safeText(body.mime, 80);
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return { ok:false, message:'仅支持 JPG、PNG、WebP 图片' };
-    const data = safeText(body.data, 14 * 1024 * 1024);
-    const match = data.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
-    if (!match || match[1] !== mime) return { ok:false, message:'图片数据格式不正确' };
-    const bytes = Buffer.from(match[2], 'base64');
-    if (!bytes.length || bytes.length > 10 * 1024 * 1024) return { ok:false, message:'单张图片必须在 10MB 以内' };
-    if (!imageBytesMatchMime(bytes, mime)) return { ok:false, message:'图片文件内容与所选格式不一致，请重新选择有效的 JPG、PNG 或 WebP 图片' };
-    const asset = normalizeEnterpriseImageAsset({ id:uid('enterprise-image'), kind:body.kind, name:body.name, description:body.description, immutableNotes:body.immutableNotes, mime, size:bytes.length, createdAt:now(), file:'pending' });
-    const ext = mime === 'image/png' ? '.png' : mime === 'image/webp' ? '.webp' : '.jpg';
-    const relative = `${profile.id}/${asset.id}${ext}`;
-    asset.file = relative;
-    const target = enterpriseAssetPath(relative); const temporary = `${target}.${uid('upload')}.tmp`; fs.mkdirSync(path.dirname(target), { recursive:true });
-    try { fs.writeFileSync(temporary, bytes, { flag:'wx' }); fs.renameSync(temporary, target); const next = structuredClone(state); const nextProfile = next.enterpriseProfiles.find((item) => item.id === profile.id); nextProfile.imageAssets.push(asset); nextProfile.updatedAt = now(); addActivityTo(next, 'success', '参考图片已入库', `${profile.name} · ${asset.name}`); commitStateSnapshot(next); return { ok:true, asset }; }
-    catch (error) { try { fs.rmSync(temporary, { force:true }); fs.rmSync(target, { force:true }); } catch {} return { ok:false, message:`参考图片未保存：${error.message}` }; }
-  }
-  if (route === '/api/enterprise-image/delete') {
-    const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.profileId, 120));
-    if (!profile) return { ok:false, message:'未找到项目资料库' };
-    const index = profile.imageAssets.findIndex((asset) => asset.id === safeText(body.assetId, 120));
-    if (index < 0) return { ok:false, message:'未找到参考图片' };
-    const asset = profile.imageAssets[index]; let stage;
-    if (asset.file !== `${profile.id}/${asset.id}${imageExtension(asset.mime)}`) return { ok:false, message:'参考图片归属校验失败，已拒绝删除以保护其他资料库' };
-    try { stage = stageEnterpriseImageRemoval(asset); } catch (error) { return { ok:false, message:`参考图片未删除：${error.message}` }; }
-    const previousUpdatedAt = profile.updatedAt; const previousActivity = state.activity.slice();
-    profile.imageAssets.splice(index, 1); profile.updatedAt = now(); addActivity('info', '参考图片已删除', `${profile.name} · ${asset.name}`);
-    try { saveState(); } catch (error) {
-      profile.imageAssets.splice(index, 0, asset); profile.updatedAt = previousUpdatedAt; state.activity = previousActivity;
-      try { rollbackEnterpriseImageRemoval(stage); } catch {}
-      return { ok:false, message:`参考图片未删除：保存资料库失败，已回滚：${error.message}` };
-    }
-    try { finalizeEnterpriseImageRemoval(stage); } catch (error) { addActivity('warning', '参考图片待清理', `${profile.name} · ${asset.name}：${error.message}`); saveState(); }
-    return { ok:true };
-  }
-  if (route === '/api/enterprise-profile/activate') {
-    const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.id, 120));
-    if (!profile) return { ok: false, message: '未找到项目资料库' };
-    if (profile.status !== 'active') return { ok: false, message: '已停用的资料库不能用于生产' };
-    state.activeEnterpriseProfileId = profile.id; addActivity('success', '已切换生产资料库', profile.name); saveState(); return { ok: true };
-  }
-  if (route === '/api/enterprise-profile/archive') {
-    const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.id, 120));
-    if (!profile) return { ok: false, message: '未找到项目资料库' };
-    profile.status = 'archived'; profile.updatedAt = now();
-    if (state.activeEnterpriseProfileId === profile.id) state.activeEnterpriseProfileId = state.enterpriseProfiles.find((item) => item.id !== profile.id && item.status === 'active')?.id || '';
-    addActivity('warning', '项目资料库已停用', profile.name); saveState(); return { ok: true };
-  }
-  if (route === '/api/enterprise-profile/restore') {
-    const profile = state.enterpriseProfiles.find((item) => item.id === safeText(body.id, 120));
-    if (!profile) return { ok: false, message: '未找到项目资料库' };
-    profile.status = 'active'; profile.updatedAt = now();
-    if (!state.activeEnterpriseProfileId) state.activeEnterpriseProfileId = profile.id;
-    addActivity('info', '项目资料库已恢复', profile.name); saveState(); return { ok: true };
-  }
-  if (route === '/api/collection/run') return runCollection(body.platform, { manual: Boolean(body.manual) });
   if (route === '/api/workflow/run') {
     if (!state.settings.masterEnabled) return stopResult('人工总控处于停止状态，请先点击“开始总控”');
     if (!analysisReady() && process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED !== '1') return { ok:false, code:'ANALYSIS_NOT_READY', message:'请先保存并分别验证文本模型与视觉模型 Key' };
@@ -2100,53 +1989,6 @@ async function handleAction(route, body) {
     return { ok:true, accepted:true, message:'工作流已接单，抓取与分析将在后台执行；可继续浏览工作台查看实时进度' };
   }
   if (route === '/api/workflow/resume') return resumeBlockedWorkflow();
-  if (route === '/api/workflow/pause-auto') { state.settings.workflowAutoEnabled = false; state.settings.collectionEnabled = false; addActivity('warning', '24小时工作流已暂停', '由人工在工作台暂停'); saveState(); return { ok: true }; }
-  if (route === '/api/collector/xhs/open-login') {
-    if (xhsBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'小红书专用浏览器正在执行另一项任务，请等待完成后再打开登录窗口' };
-    const task = (async () => { try {
-      const result = await withActiveCollector(createXhsCollector, (collector) => collector.openLogin());
-      setAgent('xhs-collector', { status:'idle', detail:'登录窗口已打开；完成登录后点击“检查登录状态”', errorCode:'', screenshot:'' });
-      addActivity('info', '已打开小红书登录窗口', '完成登录或安全验证后回到工作台点击“检查登录状态”'); saveState(); return result;
-    } catch (error) {
-      setAgent('xhs-collector', { status:'warning', detail:error.message, errorCode:error.code || 'BROWSER_START_FAILED' });
-      addActivity('warning', '小红书浏览器启动失败', error.message); saveState(); return { ok:false, code:error.code || 'BROWSER_START_FAILED', message:error.message };
-    } })();
-    collectionLocks.set('小红书登录', task); try { return await task; } finally { collectionLocks.delete('小红书登录'); }
-  }
-  if (route === '/api/collector/xhs/probe') {
-    if (!state.settings.xhsEnabled) return { ok:false, code:'PLATFORM_DISABLED', message:'请先启用小红书并保存关键词' };
-    if (xhsBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'小红书专用浏览器正在执行另一项任务，请等待完成后再检查' };
-    const task = (async () => {
-      const result = await withActiveCollector(createXhsCollector, (collector) => collector.probe(state.settings.xhsKeywords?.[0] || '内容运营'));
-      const status = result.ok ? 'ready' : result.code === 'LOGIN_REQUIRED' ? 'needs_login' : result.code === 'CAPTCHA' ? 'verification_required' : 'warning';
-      setAgent('xhs-collector', { status, detail:result.message, errorCode:result.ok ? '' : result.code || 'COLLECTOR_ERROR', screenshot:result.screenshot || '' });
-      addActivity(result.ok ? 'success' : 'warning', result.ok ? '小红书登录状态检查通过' : '小红书登录状态检查未通过', result.message); saveState(); return result;
-    })();
-    collectionLocks.set('小红书检查', task); try { return await task; } finally { collectionLocks.delete('小红书检查'); }
-  }
-  if (route === '/api/collector/xhs-creator/open-login') {
-    if (xhsBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'小红书专用浏览器正在执行另一项任务，请等待完成后再打开创作后台' };
-    const task = (async () => { try {
-      const result = await withActiveCollector(createCreatorCenterCollector, (collector) => collector.openLogin());
-      const status = result.ok ? 'ready' : result.code === 'LOGIN_REQUIRED' ? 'needs_login' : result.code === 'CAPTCHA' ? 'verification_required' : 'warning';
-      setAgent('data-agent', { status, detail:result.message, errorCode:result.code || '', screenshot:'' });
-      addActivity(result.ok ? 'success' : 'info', result.ok ? '小红书创作后台登录有效' : '已打开小红书创作后台登录窗口', result.message); saveState(); return result;
-    } catch (error) {
-      setAgent('data-agent', { status:'warning', detail:error.message, errorCode:'BROWSER_START_FAILED' }); addActivity('warning', '创作后台浏览器启动失败', error.message); saveState(); return { ok:false, code:'BROWSER_START_FAILED', message:error.message };
-    } })();
-    collectionLocks.set('小红书后台', task); try { return await task; } finally { collectionLocks.delete('小红书后台'); }
-  }
-  if (route === '/api/performance/collect') return collectCreatorPerformance({ variantIds:Array.isArray(body.variantIds) ? body.variantIds : [], manual:Boolean(body.manual) });
-  if (route === '/api/supervisor/inspect') {
-    supervisorCheck();
-    const warnings = state.agents.filter((agent) => ['warning', 'needs_login', 'verification_required'].includes(agent.status) && !(agent.id === 'xhs-collector' && !state.settings.xhsEnabled) && !(agent.id === 'douyin-collector' && !state.settings.douyinEnabled));
-    return { ok: true, warnings: warnings.length, agents: warnings.map((agent) => agent.id) };
-  }
-  if (route === '/api/collector/douyin/open-login') {
-    if (douyinBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'抖音专用浏览器正在执行另一项任务，请等待完成后再打开登录窗口' };
-    const task = (async () => { try { const result = await withActiveCollector(createDouyinCollector, (collector) => collector.openLogin()); setAgent('douyin-collector', { status:'needs_login', detail:'抖音专用浏览器已打开，等待人工扫码登录后导入公开图文链接', errorCode:'', screenshot:'' }); saveState(); return result; } catch (error) { setAgent('douyin-collector', { status:'warning', detail:error.message, errorCode:'BROWSER_START_FAILED' }); saveState(); return { ok:false, code:'BROWSER_START_FAILED', message:error.message }; } })();
-    collectionLocks.set('抖音登录', task); try { return await task; } finally { collectionLocks.delete('抖音登录'); }
-  }
   if (route === '/api/source/add') {
     const platform = safeText(body.platform, 10) || (String(body.url).includes('xiaohongshu') ? '小红书' : '抖音');
     if (!['小红书', '抖音'].includes(platform)) return { ok:false, message:'平台不正确' };
@@ -2175,98 +2017,115 @@ async function handleAction(route, body) {
     })();
     collectionLocks.set(lockKey, task); try { return await task; } finally { collectionLocks.delete(lockKey); }
   }
-  if (route === '/api/candidate/delete') { const id = safeText(body.id, 120); const item = state.candidates.find((candidate) => candidate.id === id); if (!item) return { ok: false, message: '未找到候选内容' }; if (activeWorkflowReferencesCandidate(id)) return { ok: false, message: '该候选仍属于进行中的工作流，暂时不能删除' }; const related = state.variants.filter((variant) => variant.candidateId === id); if (related.some(protectedVariant)) return { ok: false, message: '该候选已有审核通过、已导出、已发布或成功沉淀的内容，不能级联删除' }; const result = deleteCandidateRecords([id]); addActivity('warning', '候选已人工删除', `${item.title} · 同步清理${result.variantsDeleted}个未发布版本`); saveStateWithGeneratedImageCleanup(result.generatedFiles); return { ok: true, candidatesDeleted:result.candidatesDeleted, variantsDeleted:result.variantsDeleted }; }
-  if (route === '/api/candidate/cleanup') { const matched = state.candidates.filter((item) => body.scope === 'all_unselected' ? !['selected', 'generated'].includes(item.status) : item.status === 'ignored'); const blockedByWorkflow = []; const blockedByProtectedContent = []; const removable = matched.filter((item) => { const workflowBlocked = activeWorkflowReferencesCandidate(item.id); const related = state.variants.filter((variant) => variant.candidateId === item.id); const protectedContent = related.some(protectedVariant); if (workflowBlocked) blockedByWorkflow.push(item.id); if (protectedContent) blockedByProtectedContent.push(item.id); return !workflowBlocked && !protectedContent; }); const result = deleteCandidateRecords(removable.map((item) => item.id)); const blocked = matched.length - result.candidatesDeleted; const message = result.candidatesDeleted ? `删除${result.candidatesDeleted}条候选，关联未发布版本${result.variantsDeleted}个${blocked ? `；另有${blocked}条受保护未删除` : ''}` : matched.length ? `${matched.length}条候选均受未结束任务或已发布内容保护，未删除` : '没有符合清理条件的候选'; addActivity(result.candidatesDeleted ? 'warning' : 'info', '候选池批量清理完成', message); saveStateWithGeneratedImageCleanup(result.generatedFiles); return { ok: true, matched: matched.length, blocked, blockedByWorkflow: blockedByWorkflow.length, blockedByProtectedContent: blockedByProtectedContent.length, message, candidatesDeleted:result.candidatesDeleted, variantsDeleted:result.variantsDeleted }; }
-  if (route === '/api/candidate/analyze') { const item = state.candidates.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到候选内容' }; try { const result = await analyzeCandidate(item); return result; } catch (error) { item.analysisStatus = 'retryable_failed'; item.analysisTask ||= {}; item.analysisTask.lastFailure = { status:'retryable_failed', lastError:safeText(error.message,800), updatedAt:now() }; setAgent('analyst', { status: 'warning', detail: error.message }); addActivity('warning', '候选分析待重试', `${item.title} · ${error.message}`); saveState(); return { ok: false, code: 'AI_ERROR', message: error.message }; } }
-  if (route === '/api/candidate/status') {
-    const item = state.candidates.find((x) => x.id === safeText(body.id, 120));
-    if (!item) return { ok: false, message: '未找到候选内容' };
-    if (!['selected', 'ignored'].includes(body.status)) return { ok: false, message: '候选状态不正确' };
-    if (!SELF_TEST && body.status === 'selected' && item.analysisStatus !== 'completed') return { ok: false, message: '请先完成 AI 分析，再人工选款' };
-    const unchanged = item.status === body.status;
-    item.status = body.status;
-    const waitingRun = state.workflowRuns.find((run) => run.status === 'waiting_human' && ['select', 'create'].includes(run.currentStep) && run.candidateIds?.includes(item.id))
-      || state.workflowRuns.find((run) => run.status === 'waiting_human' && run.currentStep === 'select');
-    if (waitingRun && body.status === 'selected') {
-      attachCandidateToRun(waitingRun, item.id);
-      waitingRun.counts.selected = waitingRun.candidateIds.filter((id) => state.candidates.some((candidate) => candidate.id === id && ['selected', 'generated'].includes(candidate.status))).length;
-      patchRunStep(waitingRun, 'select', { status: 'completed', detail: `已确认 ${waitingRun.counts.selected} 条方向` });
-      patchRunStep(waitingRun, 'create', { status: 'waiting_human', detail: '等待人工确认开始一做策划' });
-    }
-    if (!unchanged) addActivity(body.status === 'selected' ? 'success' : 'info', body.status === 'selected' ? '人工确认选款' : '候选已忽略', item.title);
-    saveState();
-    return { ok: true, existing: unchanged, selected: body.status === 'selected', message: body.status === 'selected' ? '已选款；请在图文生产中心人工确认开始一做' : '已忽略' };
-  }
-  if (route === '/api/variant/generate') { resetDailyUsageIfNeeded(); const candidate = state.candidates.find((x) => x.id === safeText(body.candidateId, 120)); if (!candidate) return { ok: false, message: '未找到候选内容' }; if (!['selected', 'generated'].includes(candidate.status)) return { ok: false, message: '请先人工确认这个方向' }; const existing = state.variants.filter((x) => x.candidateId === candidate.id); if (existing.length) return { ok: true, existing: true, count: existing.length, message: '该方向已经生成过，不重复计费' }; if (budgetRemaining() <= 0) return { ok: false, code: 'BUDGET_LIMIT', message: '今日AI预算不足，已自动熔断' }; if (SELF_TEST && !aiReady()) { const run = runForCandidate(candidate.id); attachCandidateToRun(run, candidate.id); const variants = buildVariants(candidate).map((variant) => ({ ...variant, workflowRunId: run?.id || '' })); state.variants.unshift(...variants); candidate.status = 'generated'; state.settings.generationsToday += variants.length; if (run) { run.counts.generated += variants.length; patchRunStep(run, 'create', { status: 'completed', detail: `已生成 ${variants.length} 套` }); patchRunStep(run, 'publish', { status: 'waiting_human', detail: '等待人工审核、发布与回填' }); run.status = 'waiting_human'; } saveState(); return { ok: true, count: variants.length, testMode: true }; } return process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED === '1' && process.env.CONTENTOPS_TEST_ASYNC_CREATION !== '1' ? generateForSelectedCandidate(candidate) : enqueueFirstCreation(candidate); }
-  if (route === '/api/variant/status') {
-    const item = state.variants.find((x) => x.id === safeText(body.id, 120));
-    if (!item) return { ok: false, message: '未找到图文版本' };
-    if (!['pending', 'approved', 'rejected'].includes(body.status)) return { ok: false, message: '图文状态不正确' };
-    if (!['draft', 'pending', 'approved', 'rejected'].includes(item.status)) return { ok: false, message: '当前状态不能重新审核' };
-    if (item.status === body.status) return { ok:true, existing:true, message:'状态已经是目标值，无需重复提交' };
-    const testBypassImageGate = process.env.CONTENTOPS_TEST_BYPASS_IMAGE_GATE === '1';
-    if (!testBypassImageGate && ['pending', 'approved'].includes(body.status) && item.imagePages?.length && !item.imagePages.every((page) => page.asset?.file)) return { ok: false, message: '请先生齐全部图片，再提交人工审核' };
-    item.status = body.status;
-    const run = runForVariant(item);
-    if (run && body.status === 'approved') { run.counts.approved = (run.counts.approved || 0) + 1; patchRunStep(run, 'publish', { status: 'waiting_human', detail: `${run.counts.approved} 套已通过，等待人工发布并回填数据` }); run.status = 'waiting_human'; run.error = ''; run.finishedAt = ''; }
-    addActivity(body.status === 'approved' ? 'success' : 'info', body.status === 'approved' ? '图文审核通过' : body.status === 'pending' ? '图文已提交人工审核' : '图文已退回', item.title);
-    saveState(); return { ok: true };
-  }
-  if (route === '/api/variant/update') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; if (!['draft', 'pending', 'rejected'].includes(item.status)) return { ok: false, message: '当前状态不允许修改' }; if (['queued', 'running'].includes(item.imageJob?.status)) return { ok:false, code:'IMAGE_JOB_RUNNING', message:'图片任务正在运行。请等待完成、超时或停止总控后再修改页面，避免生成目标与编辑内容不一致' }; const title = safeText(body.title, 160); const content = safeText(body.body, 8000); const tags = normalizeTextList(body.tags, 12, 60); const imageReferencePolicy = ['auto', 'required', 'disabled'].includes(body.imageReferencePolicy) ? body.imageReferencePolicy : 'auto'; const policyChanged = (item.imageReferencePolicy || 'auto') !== imageReferencePolicy; if (Array.isArray(body.imagePages) && body.imagePages.some((page) => String(page?.imagePrompt ?? page?.prompt ?? '').length > 6000)) return { ok:false, message:'单页生图提示词不能超过6000个字符，请精简后保存' }; const imagePages = Array.isArray(body.imagePages) ? body.imagePages.map((page, index) => normalizeImagePage(page, index)).filter(Boolean).slice(0, 12) : []; if (!title || !content || imagePages.length < 2 || imagePages.some((page) => !page.imagePrompt)) return { ok: false, message: '标题、正文、至少2张图片和每页图片提示词不能为空' }; const oldPages = item.imagePages || []; const prior = new Map(oldPages.map((page) => [page.id, page])); let invalidated = 0; item.title = title; item.body = content; item.tags = tags; item.imageReferencePolicy = imageReferencePolicy; item.imagePages = imagePages.map((page) => { const before = prior.get(page.id); const unchanged = !policyChanged && before && before.copy === page.copy && before.imagePrompt === page.imagePrompt; if (before?.asset && !unchanged) invalidated += 1; return { ...page, asset: unchanged ? before.asset : null }; }); const retainedFiles = new Set(item.imagePages.map((page) => page.asset?.file).filter(Boolean)); const removedFiles = oldPages.map((page) => page.asset?.file).filter((file) => file && !retainedFiles.has(file)); item.pages = item.imagePages.map((page) => page.copy); item.status = 'draft'; item.imageStatus = item.imagePages.every((page) => page.asset?.file) ? 'ready' : 'draft'; if (policyChanged) item.imageJob = null; item.updatedAt = now(); addActivity('info', '一做工作台已保存', invalidated ? `${item.title} · ${invalidated}张图片因参考图策略、提示词或上图文案变更而需要重做` : item.title); saveStateWithGeneratedImageCleanup(removedFiles); return { ok: true, invalidated, policyChanged }; }
-  if (route === '/api/variant/image/generate') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; if (!['draft', 'pending', 'rejected'].includes(item.status)) return { ok: false, message: '当前状态不允许生成或重做图片' }; return startVariantImageJob(item, normalizeTextList(body.pageIds, 20, 120), { force:Boolean(body.force) }); }
-  if (route === '/api/variant/export-directory') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; const directory = safeText(body.directory, 2000); if (!directory || !path.isAbsolute(directory)) return { ok: false, message: '请填写本机绝对导出文件夹路径' }; try { fs.mkdirSync(directory, { recursive: true }); } catch (error) { return { ok: false, message: `无法使用导出文件夹：${error.message}` }; } item.exportDirectory = directory; item.updatedAt = now(); saveState(); return { ok: true, directory }; }
-  if (route === '/api/variant/delete') { const id = safeText(body.id, 120); const item = state.variants.find((variant) => variant.id === id); if (!item) return { ok: false, message: '未找到图文版本' }; const family = [item, ...state.variants.filter((variant) => variant.parentVariantId === id)]; if (family.some(activeWorkflowReferencesVariant)) return { ok: false, message: '该版本仍属于进行中的工作流，暂时不能删除' }; if (family.some(protectedVariant)) return { ok: false, message: '该版本或其二做子版本已有审核、导出、发布或成功沉淀记录，不能删除' }; const result = deleteVariantRecords(family.map((variant) => variant.id)); addActivity('warning', '图文版本已删除', `${item.title} · 共清理${result.deleted}个未发布版本`); saveStateWithGeneratedImageCleanup(result.generatedFiles); return { ok: true, deleted:result.deleted }; }
-  if (route === '/api/variant/cleanup') { const ids = state.variants.filter((item) => ['pending', 'rejected'].includes(item.status) && !activeWorkflowReferencesVariant(item) && !protectedVariant(item) && !state.variants.some((child) => child.parentVariantId === item.id)).map((item) => item.id); const result = deleteVariantRecords(ids); addActivity('warning', '待审核区批量清理完成', `删除${result.deleted}个不属于进行中任务的待审或退回版本`); saveStateWithGeneratedImageCleanup(result.generatedFiles); return { ok: true, deleted:result.deleted }; }
-  if (route === '/api/workflow/cleanup') { const before = state.workflowRuns.length; state.workflowRuns = state.workflowRuns.filter((run) => !['completed', 'failed', 'cancelled'].includes(run.status)); const deleted = before - state.workflowRuns.length; addActivity('info', '历史任务记录已整理', `清理${deleted}条已结束记录，进行中和受阻记录保留`); saveState(); return { ok: true, deleted }; }
-  if (route === '/api/variant/export') { const item = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!item) return { ok: false, message: '未找到图文版本' }; if (!['approved', 'exported', 'published'].includes(item.status)) return { ok: false, message: '只有审核通过的内容才能导出' }; return exportVariant(item); }
-  if (route === '/api/metrics/save') {
-    if (!state.settings.masterEnabled) return stopResult('人工总控处于停止状态，发布登记与二次分析不会启动');
-    const item = state.variants.find((x) => x.id === safeText(body.variantId, 120)); if (!item) return { ok:false, message:'未找到图文版本' };
-    if (!['approved','exported','published'].includes(item.status)) return { ok:false, message:'只有审核通过的内容才能登记为已发布笔记' };
-    if (item.platform !== '小红书') return { ok:false, code:'PLATFORM_PERFORMANCE_NOT_IMPLEMENTED', message:'抖音创作者后台数据采集尚未接入；当前不会把抖音作品误交给小红书后台分析' };
-    const identity = await resolveXhsPublicationIdentity(body.link); if (!identity.ok) return identity;
-    const link = identity.resolvedUrl;
-    const metricFields = ['exposure', 'likes', 'saves', 'comments'];
-    const manualMetricsProvided = metricFields.every((field) => body[field] !== undefined && body[field] !== null && String(body[field]).trim() !== '');
-    const manualSnapshot = manualMetricsProvided ? normalizePerformanceSnapshot({ ...body, capturedAt:now(), source:'manual', views:body.views ?? body.exposure, shares:body.shares, followers:body.followers, coverClickRate:body.coverClickRate, averageViewSeconds:body.averageViewSeconds }) : null;
-    if (manualSnapshot && (manualSnapshot.likes > manualSnapshot.exposure || manualSnapshot.saves > manualSnapshot.exposure || manualSnapshot.comments > manualSnapshot.exposure)) return { ok:false, message:'互动数不能高于曝光/播放量' };
-    item.publicationOriginalUrl = identity.originalUrl; item.publicationUrl = link; item.publicationNoteId = identity.noteId; item.creatorRowKey = ''; item.creatorMatchedBy = ''; item.creatorMatchConfidence = 0; item.publishedAt = safeText(body.publishedAt, 80) || item.publishedAt || now(); item.status = 'published'; item.performanceSnapshots ||= [];
-    const run = runForVariant(item); if (run) { run.counts.published = (run.counts.published || 0) + 1; patchRunStep(run, 'publish', { status:'completed', detail:`已登记发布 ${run.counts.published} 条，已开启后台自动跟踪` }); patchRunStep(run, 'performance', { status:'waiting_human', detail:'已登记发布链接，等待小红书创作后台自动采样' }); run.status = 'waiting_human'; }
-    addActivity('success', '已登记发布链接', `${item.title} · ${item.publishedAt} · 将立即尝试采样，并按2/24/72小时自动跟踪`); saveState();
-    if (manualSnapshot) {
-      item.performanceSnapshots.push(manualSnapshot); saveState();
-      const result = await analyzePublishedPerformance(item, manualSnapshot, { manual:true });
-      return { ...result, noteId:item.publicationNoteId, matchedBy:item.creatorMatchedBy, matchConfidence:item.creatorMatchConfidence, message:'已登记发布链接和人工兜底快照；后台仍会按节点自动采样' };
-    }
-    const sampled = await collectCreatorPerformance({ variantIds:[item.id], manual:true });
-    if (!sampled.ok && !['LOGIN_REQUIRED', 'CAPTCHA', 'PAGE_UNRECOGNIZED'].includes(sampled.code)) return sampled;
-    const matched = Number(sampled.sampled || 0) > 0;
-    return { ok:true, tracked:true, sampled:matched, noteId:item.publicationNoteId, matchedBy:item.creatorMatchedBy, matchConfidence:item.creatorMatchConfidence, message: matched ? '发布链接已登记，已读取创作后台初始快照；后续将自动跟踪' : '发布链接已登记，等待创作后台出现数据；后续将按2/24/72小时自动跟踪' };
-  }
   if (route === '/api/variant/scale') { const generation = masterGeneration; if (masterStopped(generation)) return stopResult('人工总控处于停止状态，二做不会启动'); const parent = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!parent) return { ok: false, message: '未找到图文版本' }; if (parent.decision === 'scaled') return { ok: true, existing: true, count: state.variants.filter((x) => x.parentVariantId === parent.id).length, message: '已经进入放大循环' }; if (parent.decision !== 'scale') return { ok: false, message: '只有系统判断为“建议放大”的内容才能进入下一轮' }; const candidate = state.candidates.find((x) => x.id === parent.candidateId); if (!candidate) return { ok: false, message: '没有找到母版来源' }; const run = runForVariant(parent); if (run) { run.status = 'running'; patchRunStep(run, 'scale', { status: 'running', detail: '人工已确认，正在生成二做版本' }); } try { const context = `这是基于已发布胜出版本的二次生产。胜出元素：${JSON.stringify(parent.performanceAnalysis?.winningElements || [])}。下一方向：${JSON.stringify(parent.performanceAnalysis?.nextDirections || [])}`; const scaleCount = state.settings.scaleGenerationCount; const generated = SELF_TEST && !aiReady() ? { ok: true, variants: buildVariants(candidate).slice(0, scaleCount), cost: 0 } : await generateWithAi(candidate, scaleCount, context); if (masterStopped(generation)) return stopResult('人工总控已停止，二做结果不会写入'); if (!generated?.ok || !Array.isArray(generated.variants)) return generated?.code === 'MASTER_STOPPED' ? generated : { ok: false, code: generated?.code || 'AI_ERROR', message: generated?.message || '二做没有返回可用版本' }; const children = generated.variants.map((item, index) => ({ ...item, workflowRunId: run?.id || parent.workflowRunId || '', parentVariantId: parent.id, title: item.title || `${parent.title} · 放大实验${index + 1}` })); state.variants.unshift(...children); parent.decision = 'scaled'; if (run) { run.counts.scaled = (run.counts.scaled || 0) + children.length; run.actualCost += generated.cost || 0; patchRunStep(run, 'scale', { status: 'completed', detail: `已生成 ${children.length} 套二做版本，转入新一轮人工审核` }); finishRun(run, 'completed'); } if (!state.materials.some((x) => x.sourceVariantId === parent.id)) state.materials.unshift({ id: uid('mat'), sourceVariantId: parent.id, type: '胜出内容', name: parent.title, uses: 1, status: '已验证', score: parent.performanceAnalysis?.confidence || 85 }); addActivity('success', '进入二次生产循环', `新增${children.length}个受控变体，母版：${parent.title}`); saveState(); return { ok: true, count: children.length }; } catch (error) { if (run?.status === 'cancelled' || masterStopped(generation)) return stopResult('人工总控已停止，二做结果不会写入'); if (run) { patchRunStep(run, 'scale', { status: 'blocked', detail: error.message }); finishRun(run, 'blocked', error.message); saveState(); } return { ok: false, code: 'AI_ERROR', message: error.message }; } }
-  if (route === '/api/agent/restart' && body.id === 'data-agent') {
-    if (xhsBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'小红书专用浏览器正在执行另一项任务，数据循环检查稍后再试' };
-    const agent = state.agents.find((item) => item.id === 'data-agent'); if (!agent) return { ok:false, message:'未找到模块' };
-    agent.restarts++;
-    const task = (async () => { const result = await withActiveCollector(createCreatorCenterCollector, (collector) => collector.probe()); const status = result.ok ? 'ready' : result.code === 'LOGIN_REQUIRED' ? 'needs_login' : result.code === 'CAPTCHA' ? 'verification_required' : 'warning'; setAgent('data-agent', { status, detail:result.message, errorCode:result.code || '', screenshot:'' }); addActivity(result.ok ? 'success' : 'warning', '重新检查 数据循环 Agent', result.message); saveState(); return result; })();
-    collectionLocks.set('小红书后台', task); try { return await task; } finally { collectionLocks.delete('小红书后台'); }
-  }
-  if (route === '/api/agent/restart') { const agent = state.agents.find((x) => x.id === body.id); if (!agent) return { ok: false, message: '未找到模块' }; if (agent.status === 'disabled') return { ok: false, message: '该模块尚未接入，不能伪装成已重启' }; if (agent.id === 'douyin-collector') { if (douyinBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'抖音专用浏览器正在执行另一项任务，暂时不能重新检查' }; agent.restarts++; const task=(async()=>{ try { const result = await withActiveCollector(createDouyinCollector, (collector) => collector.openLogin()); setAgent('douyin-collector', { status:'needs_login', detail:'抖音专用浏览器已打开；请完成登录或安全验证后，再按关键词测试采集', errorCode:'', screenshot:'' }); addActivity('info','重新检查 抖音抓取 Agent',result.message); saveState(); return result; } catch (error) { setAgent('douyin-collector',{ status:'warning', detail:error.message, errorCode:'BROWSER_START_FAILED' }); saveState(); return { ok:false, code:'BROWSER_START_FAILED', message:error.message }; } })(); collectionLocks.set('抖音登录',task); try { return await task; } finally { collectionLocks.delete('抖音登录'); } } if (['needs_login', 'verification_required'].includes(agent.status)) return { ok: false, message: '该状态需要人工登录或验证，系统不会自动绕过' }; agent.status = 'running'; agent.detail = '正在重新检查模块'; agent.restarts++; addActivity('warning', `检查 ${agent.name}`, '由运行监控执行'); saveState(); await sleep(450); agent.status = agent.id === 'xhs-collector' ? 'needs_login' : 'healthy'; agent.detail = agent.id === 'xhs-collector' ? '请通过“检查登录状态”快速确认，不必先跑完整采集' : '检查完成，心跳正常'; agent.lastHeartbeat = now(); saveState(); return { ok: true }; }
-  if (route === '/api/settings/save') { const imageRules = normalizeImageRules(body); const requestedAutomation = Boolean(body.workflowAutoEnabled ?? body.collectionEnabled); const automationEnabled = state.settings.masterEnabled && requestedAutomation; const submittedFeishuWebhook = safeText(body.feishuWebhook, 2000); const clearFeishuWebhook = body.clearFeishuWebhook === true; if (submittedFeishuWebhook && !feishuWebhookUrl(submittedFeishuWebhook)) return { ok: false, message: '只允许官方飞书机器人 HTTPS Webhook' }; const next = { collectionEnabled: automationEnabled, workflowAutoEnabled: automationEnabled, xhsEnabled: Boolean(body.xhsEnabled), douyinEnabled: Boolean(body.douyinEnabled), xhsKeywords: normalizeKeywords(body.xhsKeywords), douyinKeywords: normalizeKeywords(body.douyinKeywords), xhsMaxPerKeyword: finiteNumber(body.xhsMaxPerKeyword, state.settings.xhsMaxPerKeyword, 1, 500), xhsScrollRounds: finiteNumber(body.xhsScrollRounds, state.settings.xhsScrollRounds, 0, 12), xhsDelayMs: finiteNumber(body.xhsDelayMs, state.settings.xhsDelayMs, 1000, 30000), douyinDelayMs: finiteNumber(body.douyinDelayMs, state.settings.douyinDelayMs, 1500, 30000), autoMorningTime: normalizeClock(body.autoMorningTime, state.settings.autoMorningTime), autoAfternoonTime: normalizeClock(body.autoAfternoonTime, state.settings.autoAfternoonTime), manualRawLimit: finiteNumber(body.manualRawLimit, state.settings.manualRawLimit, 30, 50), automaticRawLimit: finiteNumber(body.automaticRawLimit, state.settings.automaticRawLimit, 50, 500), manualFinalLimit: finiteNumber(body.manualFinalLimit, state.settings.manualFinalLimit, 1, 10), automaticFinalLimit: finiteNumber(body.automaticFinalLimit, state.settings.automaticFinalLimit, 1, 10), dailyCandidateLimit: finiteNumber(body.dailyCandidateLimit, state.settings.dailyCandidateLimit, 1, 100000), aiAnalysisLimit: finiteNumber(body.aiAnalysisLimit, state.settings.aiAnalysisLimit, 1, 100000), analysisConcurrency: finiteNumber(body.analysisConcurrency, state.settings.analysisConcurrency, 1, 5), analysisAutoRetryCount: finiteNumber(body.analysisAutoRetryCount, state.settings.analysisAutoRetryCount, 0, 3), generationCount: finiteNumber(body.generationCount, state.settings.generationCount, 1, 20), scaleGenerationCount: finiteNumber(body.scaleGenerationCount, state.settings.scaleGenerationCount, 1, 20), performanceAutoEnabled: body.performanceAutoEnabled !== false, performanceSampleHours: normalizePerformanceSampleHours(body.performanceSampleHours), performanceAccountBaselineNotes: finiteNumber(body.performanceAccountBaselineNotes, state.settings.performanceAccountBaselineNotes, 3, 100), imageCount: imageRules.imageCount, imageAspectRatio: imageRules.aspectRatio, imageSize: imageRules.size, imageTextMode: imageRules.textMode, imageStyle: imageRules.style, imageSingleTimeoutSeconds: Math.round(imageRules.singleTimeoutMs / 1000), imageJobTimeoutMinutes: Math.round(imageRules.jobTimeoutMs / 60000), imageMaxConcurrentJobs: imageRules.maxConcurrentJobs, imageQualityReviewEnabled: imageRules.qualityReviewEnabled, imageQualityThreshold: imageRules.qualityThreshold, imageAutoRetryCount: imageRules.autoRetryCount, imagePipelineVersion: 3, brandColors: imageRules.brandColors, mustShow: imageRules.mustShow, prohibitedElements: imageRules.prohibitedElements, imageDailyBudget: finiteNumber(body.imageDailyBudget, state.settings.imageDailyBudget, 0, 1000000), imageCostPerImage: finiteNumber(body.imageCostPerImage, state.settings.imageCostPerImage, 0, 1000000), dailyBudget: finiteNumber(body.dailyBudget, state.settings.dailyBudget, 0, 1000000), visionDailyBudget: finiteNumber(body.visionDailyBudget, state.settings.visionDailyBudget, 0, 1000000), visionMaxImages: finiteNumber(body.visionMaxImages, state.settings.visionMaxImages, 1, 20) };
-    next.imagePipelineVersion = 3;
-    // 保留旧 API 的兼容入口：历史自动化或已部署的调用方仍可传单套连接；新页面不会再写这些字段。
-    if (Object.prototype.hasOwnProperty.call(body, 'aiBaseUrl')) Object.assign(next, { aiBaseUrl: safeText(body.aiBaseUrl, 1000), aiModel: safeText(body.aiModel, 120), aiInputPricePerMillion: finiteNumber(body.aiInputPricePerMillion, state.settings.aiInputPricePerMillion, 0, 100000), aiOutputPricePerMillion: finiteNumber(body.aiOutputPricePerMillion, state.settings.aiOutputPricePerMillion, 0, 100000) });
-    if (Object.prototype.hasOwnProperty.call(body, 'visionBaseUrl')) Object.assign(next, { visionBaseUrl: safeText(body.visionBaseUrl, 1000), visionModel: safeText(body.visionModel, 120), visionInputPricePerMillion: finiteNumber(body.visionInputPricePerMillion, state.settings.visionInputPricePerMillion, 0, 100000), visionOutputPricePerMillion: finiteNumber(body.visionOutputPricePerMillion, state.settings.visionOutputPricePerMillion, 0, 100000) });
-    if (!next.xhsEnabled && !next.douyinEnabled) return { ok: false, message: '请至少启用一个采集平台' }; if (next.xhsEnabled && !next.xhsKeywords.length) return { ok: false, message: '请至少填写一个小红书关键词' }; if (next.douyinEnabled && !next.douyinKeywords.length) return { ok: false, message: '请至少填写一个抖音关键词' }; if (next.autoMorningTime === next.autoAfternoonTime) return { ok: false, message: '上午和下午自动运行时间不能相同' }; try { if (submittedFeishuWebhook) FEISHU_CREDENTIALS.save(submittedFeishuWebhook); else if (clearFeishuWebhook) FEISHU_CREDENTIALS.clear(); } catch (error) { return { ok: false, message: error.message }; } Object.assign(state.settings, next, { aiCredentialConfigured: CREDENTIALS.has(), visionCredentialConfigured: VISION_CREDENTIALS.has(), feishuWebhookConfigured: hasFeishuWebhook(next) }); delete state.settings.feishuWebhook; const schedulingDetail = requestedAutomation && !automationEnabled ? '人工总控处于停止状态，本次只保存参数，24小时调度仍保持关闭' : '抓取目标、预算与调度将在下一任务生效；模型连接由档案独立管理'; addActivity('info', '系统设置已更新', schedulingDetail); saveState(); return { ok: true, automationEnabled, message: schedulingDetail }; }
-  if (route === '/api/ai/credential/save') { try { CREDENTIALS.save(body.apiKey); state.settings.aiCredentialConfigured = true; state.settings.lastAiCheckOk = false; addActivity('success', 'AI 凭据已安全保存', '凭据由当前 Windows 用户加密，不写入业务状态'); saveState(); return { ok: true, message: 'API Key 已由 Windows 加密保存' }; } catch (error) { return { ok: false, message: error.message }; } }
-  if (route === '/api/ai/credential/clear') { CREDENTIALS.clear(); state.settings.aiCredentialConfigured = false; state.settings.lastAiCheckOk = false; saveState(); return { ok: true }; }
-  if (route === '/api/ai/test') { try { const prompt = '返回 {"ok":true,"message":"连接成功"}'; const reservation = reserveCall('text', prompt.length + 20, 100, '文本模型连接测试'); if (!reservation.ok) return reservation; const result = await callJson({ baseUrl: activeConnection('text').baseUrl, apiKey: activeConnection('text').apiKey, model: activeConnection('text').model, system: '你是连接测试助手，只返回 JSON。', prompt, temperature: 0, timeoutMs: 30000, maxOutputTokens: 100 }); state.settings.lastAiCheckAt = now(); state.settings.lastAiCheckOk = Boolean(result.data?.ok); state.settings.aiCredentialConfigured = CREDENTIALS.has(); recordAiUsage(result.usage, '文本模型连接测试'); addActivity(state.settings.lastAiCheckOk ? 'success' : 'warning', 'AI 接口连接测试', state.settings.lastAiCheckOk ? '模型接口可用' : '模型返回不符合预期'); saveState(); return { ok: state.settings.lastAiCheckOk, message: state.settings.lastAiCheckOk ? '模型 API 已联通' : '模型返回不符合预期' }; } catch (error) { state.settings.lastAiCheckAt = now(); state.settings.lastAiCheckOk = false; addActivity('warning', 'AI 接口连接失败', error.message); saveState(); return { ok: false, message: error.message }; } }
-  if (route === '/api/vision/credential/save') { try { VISION_CREDENTIALS.save(body.apiKey); state.settings.visionCredentialConfigured = true; state.settings.lastVisionCheckOk = false; addActivity('success', '视觉模型凭据已安全保存', '视觉 Key 与文本 Key 分开加密保存'); saveState(); return { ok: true, message: '视觉 API Key 已由 Windows 加密保存' }; } catch (error) { return { ok: false, message: error.message }; } }
-  if (route === '/api/vision/credential/clear') { VISION_CREDENTIALS.clear(); state.settings.visionCredentialConfigured = false; state.settings.lastVisionCheckOk = false; saveState(); return { ok: true }; }
-  if (route === '/api/vision/test') { try { const prompt = '观察测试图片，只返回JSON：{"ok":true,"summary":"一句话描述图片"}'; const reservation = reserveCall('vision', prompt.length + 2000, 200, '视觉模型连接测试'); if (!reservation.ok) return reservation; const result = await callVisionJson({ baseUrl: activeConnection('vision').baseUrl, apiKey: activeConnection('vision').apiKey, model: activeConnection('vision').model, prompt, imageUrls: [VISION_TEST_IMAGE_URL], allowTrustedTestImage: true, timeoutMs: 60000, maxOutputTokens: 200 }); state.settings.lastVisionCheckAt = now(); state.settings.lastVisionCheckOk = Boolean(result.data?.ok); state.settings.visionCredentialConfigured = VISION_CREDENTIALS.has(); recordVisionUsage(result.usage, '视觉模型连接测试'); addActivity(state.settings.lastVisionCheckOk ? 'success' : 'warning', '视觉模型连接测试', state.settings.lastVisionCheckOk ? '视觉模型可以读取图片' : '视觉模型返回不符合预期'); saveState(); return { ok: state.settings.lastVisionCheckOk, message: state.settings.lastVisionCheckOk ? '视觉模型已联通并能读取图片' : '视觉模型返回不符合预期' }; } catch (error) { state.settings.lastVisionCheckAt = now(); state.settings.lastVisionCheckOk = false; addActivity('warning', '视觉模型连接失败', error.message); saveState(); return { ok: false, message: error.message }; } }
-  if (route === '/api/feishu/test') { const result = await sendFeishu('【图文内容增长 Agent】运行监控测试消息：系统当前运行正常。'); addActivity(result.ok ? 'success' : 'warning', '飞书联通测试', result.message); saveState(); return result; }
   if (route === '/api/data/reset') { const generatedFiles = generatedImageFilesFromVariants(state.variants); const keepSettings = SELF_TEST ? null : structuredClone(state.settings); const keepEnterpriseProfiles = SELF_TEST ? [] : structuredClone(state.enterpriseProfiles || []); const keepActiveProfileId = SELF_TEST ? '' : state.activeEnterpriseProfileId; state = initialState(); if (keepSettings) { Object.assign(state.settings, keepSettings, { candidatesToday: 0, analysesToday: 0, generationsToday: 0, spentToday: 0, visionSpentToday: 0, usageDate: DAY() }); state.materials = []; state.enterpriseProfiles = keepEnterpriseProfiles; state.activeEnterpriseProfileId = keepActiveProfileId; } state.candidates = []; state.variants = []; state.publications = []; addActivity('info', '已清空本地数据', keepSettings ? '采集设置、项目资料库与专用浏览器登录资料均已保留' : '测试状态已恢复初始值'); saveStateWithGeneratedImageCleanup(generatedFiles); return { ok: true }; }
+  const handler = actionRoutes.get(route);
+  if (handler) return handler(body);
   return { ok: false, message: '未知操作' };
+}
+
+// ---- 路由表：按业务域拆到 lib/actions/*.cjs ----
+const ACTION_MODULES = [
+  require('./lib/actions/profiles.cjs'),
+  require('./lib/actions/enterprise.cjs'),
+  require('./lib/actions/content.cjs'),
+  require('./lib/actions/variants.cjs'),
+  require('./lib/actions/workflow.cjs'),
+  require('./lib/actions/system.cjs')
+];
+let actionRoutes = null;
+let actionContext = null;
+function buildActionRoutes(context) {
+  const table = new Map();
+  for (const register of ACTION_MODULES) {
+    const entries = register(context);
+    for (const [routePath, handler] of Object.entries(entries)) {
+      if (table.has(routePath)) throw new Error(`路由重复注册：${routePath}`);
+      table.set(routePath, handler);
+    }
+  }
+  return table;
+}
+function ensureActionRoutes() {
+  if (actionRoutes) return;
+  actionContext = {
+    get state() { return state; },
+    CREDENTIALS,
+    FEISHU_CREDENTIALS,
+    IMAGE_REFERENCE_TEST_PNG,
+    SELF_TEST,
+    VISION_CREDENTIALS,
+    VISION_TEST_IMAGE_URL,
+    activeConnection,
+    activeWorkflowReferencesCandidate,
+    activeWorkflowReferencesVariant,
+    addActivity,
+    addActivityTo,
+    aiReady,
+    analyzeCandidate,
+    analyzePublishedPerformance,
+    applyProfile,
+    attachCandidateToRun,
+    budgetRemaining,
+    buildVariants,
+    callJson,
+    callVisionJson,
+    collectCreatorPerformance,
+    collectionLocks,
+    commitStateSnapshot,
+    createCreatorCenterCollector,
+    createDouyinCollector,
+    createXhsCollector,
+    creatorRowKey,
+    deleteCandidateRecords,
+    deleteVariantRecords,
+    douyinBrowserBusy,
+    enqueueFirstCreation,
+    enterpriseAssetPath,
+    exportEnterpriseProfile,
+    exportVariant,
+    feishuWebhookUrl,
+    finalizeEnterpriseImageRemoval,
+    fs,
+    generateForSelectedCandidate,
+    generateImage,
+    hasFeishuWebhook,
+    json,
+    normalizeEnterpriseImageAsset,
+    normalizeEnterpriseProfile,
+    normalizeImagePage,
+    normalizeImageRules,
+    normalizePerformanceSampleHours,
+    normalizePerformanceSnapshot,
+    patchRunStep,
+    path,
+    profileCredentialStore,
+    profileList,
+    profileShape,
+    protectedVariant,
+    recordAiUsage,
+    recordVisionUsage,
+    reserveCall,
+    resetDailyUsageIfNeeded,
+    resolveXhsPublicationIdentity,
+    rollbackEnterpriseImageRemoval,
+    runCollection,
+    runForCandidate,
+    runForVariant,
+    saveState,
+    saveStateWithGeneratedImageCleanup,
+    sendFeishu,
+    setAgent,
+    stageEnterpriseImageRemoval,
+    startVariantImageJob,
+    stopResult,
+    supervisorCheck,
+    withActiveCollector,
+    xhsBrowserBusy,
+    profileKind: (value) => ['text', 'vision', 'image'].includes(value) ? value : 'text',
+    activeProfileKey: (kind) => kind === 'vision' ? 'activeVisionProfileId' : kind === 'image' ? 'activeImageProfileId' : 'activeTextProfileId'
+  };
+  actionRoutes = buildActionRoutes(actionContext);
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };

@@ -31,7 +31,14 @@ node server.cjs
 
 ## 开发
 
-核心实现位于根目录、`ai/`、`collector/` 和 `launcher/`。运行前请自行检查源码，且不要将真实 Key、Cookie、状态文件、参考图片或 Chrome profile 提交到仓库。
+模块划分、请求链路、加接口/加平台的改动清单见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+
+```powershell
+npm test          # 语法检查 + 安全回归 + 接口行为快照 + 离线自检
+npm start         # node server.cjs
+```
+
+核心实现位于根目录、`lib/`、`ai/`、`collector/` 和 `launcher/`。运行前请自行检查源码，且不要将真实 Key、Cookie、状态文件、参考图片或 Chrome profile 提交到仓库。
 
 ## 许可证
 
