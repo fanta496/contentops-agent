@@ -4,16 +4,15 @@
  * 采集器契约检查：只做静态检查，不启动浏览器。
  * 目的：新加一个平台时，先确认采集器该有的方法都在，不要等真跑采集才发现漏了。
  *
- * - 必须实现：openLogin / collect / closeBrowser
- * - 建议实现：probe（登录状态探测）。缺失只记 warning，不判失败——
- *   抖音采集器目前就没有 probe（README 里已注明抖音闭环未完成）。
+ * - 必须实现：openLogin / probe / collect / closeBrowser
+ * - probe 是登录状态探测：没有它，界面只能"打开登录窗口"，无法判断登录是否有效。
  */
 
 const path = require('node:path');
 const { PLATFORMS } = require(path.resolve(__dirname, '..', 'lib', 'platforms.cjs'));
 
-const REQUIRED = ['openLogin', 'collect', 'closeBrowser'];
-const SUGGESTED = ['probe'];
+const REQUIRED = ['openLogin', 'probe', 'collect', 'closeBrowser'];
+const SUGGESTED = [];
 const problems = [];
 const warnings = [];
 

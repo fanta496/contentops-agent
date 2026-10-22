@@ -361,6 +361,14 @@
         "message": "人工总控处于停止状态，抓取不会启动"
       }
     },
+    "douyin-probe-disabled": {
+      "status": 200,
+      "body": {
+        "ok": false,
+        "code": "PLATFORM_DISABLED",
+        "message": "请先启用抖音并保存关键词"
+      }
+    },
     "performance-collect": {
       "status": 200,
       "body": {
@@ -865,6 +873,6 @@
     }
   },
   "meta": {
-    "stepCount": 60
+    "stepCount": 61
   }
 }

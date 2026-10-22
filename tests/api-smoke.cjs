@@ -46,6 +46,8 @@ const STEPS = [
   { name: 'workflow-cleanup', method: 'POST', path: '/api/workflow/cleanup', body: {} },
   { name: 'collection-run', method: 'POST', path: '/api/collection/run', body: { platform: '小红书', manual: true } },
   { name: 'collection-run-bad-platform', method: 'POST', path: '/api/collection/run', body: { platform: '不存在' } },
+  // 抖音默认关闭：这条只会走到平台开关校验，不会启动浏览器。
+  { name: 'douyin-probe-disabled', method: 'POST', path: '/api/collector/douyin/probe', body: {} },
   { name: 'performance-collect', method: 'POST', path: '/api/performance/collect', body: {} },
   { name: 'supervisor-inspect', method: 'POST', path: '/api/supervisor/inspect', body: {} },
   { name: 'profile-save-empty', method: 'POST', path: '/api/model-profile/save', body: {} },

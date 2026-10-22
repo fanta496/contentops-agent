@@ -272,6 +272,40 @@ class DouyinCollector {
     return { ok:true, message:'已打开抖音专用浏览器，请人工扫码登录；登录凭据仅保留在此专用浏览器资料目录' };
   }
 
+  // 登录状态探测：只打开搜索页读一眼，不抓内容。
+  // 抖音的验证可能藏在 iframe 里（不点也会预加载），所以这里和 collect() 用同一套判断。
+  async probe(keyword = '内容运营') {
+    const target = this.searchUrl(keyword || '内容运营');
+    const { client } = await this.session.openClient('https://www.douyin.com/', 'douyin.com');
+    try {
+      if (!await this.navigateWithStop(client, target, 1200)) return { ok:false, code:'PROBE_ABORTED', message:'抖音搜索页未能在限定时间内就绪' };
+      const state = await client.evaluate(`(() => {
+        const visible = (node) => { try { const box = node.getBoundingClientRect(); const style = getComputedStyle(node); return box.width > 8 && box.height > 8 && style.visibility !== 'hidden' && style.display !== 'none'; } catch { return false; } };
+        const challengeFrame = [...document.querySelectorAll('iframe')].some((frame) => {
+          if (!/(?:verifycenter|nocaptcha|captcha|verify)/i.test(frame.src || '')) return false;
+          return visible(frame);
+        });
+        const bodyText = (document.body && document.body.innerText || '').slice(0, 8000);
+        const loginSignals = ['登录后查看', '扫码登录', '手机号登录', '登录抖音', '请先登录'];
+        const loginForm = [...document.querySelectorAll('[class*="login"],[class*="Login"],[data-e2e*="login"],[role="dialog"]')].some(visible);
+        const works = [...document.querySelectorAll('a[href*="/note/"],a[href*="/video/"]')].filter(visible).length;
+        return { url: location.href, title: document.title, challengeFrame, loginForm, works, loginText: loginSignals.some((text) => bodyText.includes(text)), bodyExcerpt: bodyText.slice(0, 500) };
+      })()`);
+      if (state?.challengeFrame) {
+        return { ok:false, code:'CAPTCHA', message:'抖音要求安全验证，请人工处理后再检查', screenshot:await this.captureFailure(client, 'captcha') };
+      }
+      if (Number(state?.works) === 0 && (state?.loginForm || state?.loginText)) {
+        return { ok:false, code:'LOGIN_REQUIRED', message:'抖音登录状态不可用，请在专用浏览器里扫码登录', screenshot:await this.captureFailure(client, 'login') };
+      }
+      if (Number(state?.works) === 0) {
+        return { ok:false, code:'PAGE_UNRECOGNIZED', message:'抖音搜索页没有识别到作品入口，可能是页面结构变化或网络问题', screenshot:await this.captureFailure(client, 'unrecognized') };
+      }
+      return { ok:true, code:'PAGE_REACHABLE', message:`页面可访问，识别到 ${Number(state.works)} 个作品入口；正式采集时会继续校验` };
+    } finally {
+      client.close();
+    }
+  }
+
   async importLink(sourceUrl, { shouldStop } = {}) {
     const sourceIdentity = workIdentity(sourceUrl);
     if (sourceIdentity.conflict) return { ok:false, code:'ID_MISMATCH', message:'链接中的作品路径 ID 与 modal_id 不一致，已拒绝导入，避免把错误作品写入候选池' };
