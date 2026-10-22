@@ -424,6 +424,24 @@ class DouyinCollector {
         if (workIdentity(afterDomClick).id) break;
       }
       if (!workIdentity(afterDomClick).id) {
+      // 抖音图文详情是全屏弹层，URL 不变，所以拿不到 /note/<id>。
+      // 记录弹层里的候选线索，用来确定 id 到底放在哪。
+      const detailProbe = await client.evaluate(`(() => {
+        const host = document.querySelector('[data-e2e*="note"],[data-e2e*="detail"],[class*="note-detail"],[class*="player"]') || document.body;
+        const html = (host && host.outerHTML) || '';
+        const ids = [...new Set((html.match(/\\d{19}/g) || []))].slice(0, 5);
+        const attrs = [...document.querySelectorAll('[data-aweme-id],[data-item-id],[data-id]')].slice(0, 6)
+          .map((node) => node.getAttribute('data-aweme-id') || node.getAttribute('data-item-id') || node.getAttribute('data-id') || '')
+          .filter(Boolean);
+        const keys = Object.keys(window).filter((key) => /RENDER|INIT|__|DATA/i.test(key)).slice(0, 10);
+        return { url: location.href, ids, attrs, keys };
+      })()`).catch(() => null);
+      if (detailProbe) {
+        warnings.push({
+          code: 'DETAIL_ID_UNAVAILABLE',
+          message: `图文详情已打开但取不到作品 id；URL=${String(detailProbe.url || '').slice(0, 90)}；19位候选=${detailProbe.ids.join(',') || '无'}；data属性=${detailProbe.attrs.slice(0, 4).join(',') || '无'}；全局键=${detailProbe.keys.join(',') || '无'}`
+        });
+      }
         await client.command('Input.dispatchMouseEvent', { type:'mousePressed', x:point.x, y:point.y, button:'left', clickCount:1 }, 10000);
         await client.command('Input.dispatchMouseEvent', { type:'mouseReleased', x:point.x, y:point.y, button:'left', clickCount:1 }, 10000);
       }
