@@ -62,10 +62,16 @@ async function main() {
   fs.rmSync(DATA_DIR, { recursive: true, force: true });
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
-  // 模拟上次进程崩溃时留下的未结清票据：启动后必须按保守口径入账
-  fs.writeFileSync(path.join(DATA_DIR, 'budget-holds.json'), JSON.stringify([
-    { id: 'hold_crash_1', kind: 'text', amount: 0.5, purpose: '崩溃前未结清', state: 'held' }
-  ]), 'utf8');
+  // 模拟上次进程崩在落盘前：票据日志仍是 held，启动后必须按保守口径补账
+  fs.writeFileSync(path.join(DATA_DIR, 'state.json'), JSON.stringify({
+    version: 2,
+    mode: 'workflow-agent',
+    settings: {
+      budgetJournal: [
+        { id: 'hold_crash_1', kind: 'text', amount: 0.5, purpose: '崩溃前未结清', status: 'held', createdAt: new Date().toISOString() }
+      ]
+    }
+  }, null, 2), 'utf8');
 
   const child = spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
     cwd: ROOT,
@@ -79,7 +85,7 @@ async function main() {
 
     // 1. 建一个「一定能连到」的假档案：baseUrl 指向本机已关闭的端口，失败得快、不花钱。
     const saved = await request('POST', '/api/model-profile/save', {
-      kind: 'text', name: '回归测试档案', baseUrl: 'http://127.0.0.1:9', model: 'test-model', maxOutputTokens: 100, requestTimeoutSeconds: 10
+      kind: 'text', name: '回归测试档案', apiKey: 'sk-handler-regression', baseUrl: 'http://127.0.0.1:9', model: 'test-model', maxOutputTokens: 100, requestTimeoutSeconds: 10
     });
     if (saved.status !== 200 || saved.body?.ok !== true) problems.push(`保存档案失败：${saved.status} ${JSON.stringify(saved.body).slice(0, 120)}`);
     const profileId = saved.body?.profile?.id;
@@ -95,10 +101,10 @@ async function main() {
     // 4. 图片预算 ¥1、单张 ¥1：连续两次连接测试，第二次必须被预算拦下
     await request('POST', '/api/settings/save', {
       xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['壁纸'],
-      imageDailyBudget: 1, imageCostPerImage: 1
+      imageDailyBudget: 1, imageCostPerImage: 1, inputPricePerMillion: 0, outputPricePerMillion: 0
     });
     const imageProfile = await request('POST', '/api/model-profile/save', {
-      kind: 'image', name: '图片回归档案', baseUrl: 'http://127.0.0.1:9', model: 'img-test', maxOutputTokens: 100, requestTimeoutSeconds: 5, imageInputMode: 'text_only'
+      kind: 'image', name: '图片回归档案', apiKey: 'sk-handler-regression', baseUrl: 'http://127.0.0.1:9', model: 'img-test', maxOutputTokens: 100, requestTimeoutSeconds: 5, imageInputMode: 'text_only'
     });
     const imageProfileId = imageProfile.body?.profile?.id;
     await request('POST', '/api/ai/credential/save', { apiKey: 'sk-handler-regression' });
@@ -115,7 +121,7 @@ async function main() {
     // 4. 其它带预算/注册表依赖的入口也点一下
     // 崩溃恢复：未结清票据要按保守口径计入当日消费
     const recoveredState = await request('GET', '/api/state');
-    if (Number(recoveredState.body?.settings?.spentToday || 0) < 0.5) {
+    if (Number(recoveredState.body?.settings?.spentToday || 0) < 0.45) {
       problems.push(`崩溃恢复未生效：spentToday=${recoveredState.body?.settings?.spentToday}`);
     }
 

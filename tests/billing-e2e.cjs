@@ -163,7 +163,61 @@ async function main() {
     fs.rmSync(dataB, { recursive: true, force: true });
   }
 
-  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 2, problems }, null, 2));
+  // ---------- 场景 C：未保存 Key ----------
+  const providerC = await startMockProvider();
+  const dataC = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `billing-c-${process.pid}`);
+  fs.rmSync(dataC, { recursive: true, force: true });
+  fs.mkdirSync(dataC, { recursive: true });
+  const portC = 19000 + (process.pid % 80);
+  const serverC = startServer(dataC, portC);
+  try {
+    await waitForHealth(portC, Date.now() + 30000);
+    const saved = await request(portC, 'POST', '/api/model-profile/save', {
+      kind: 'text', name: '无 Key 档案', baseUrl: `http://127.0.0.1:${providerC.port}`, model: 'mock-model',
+      inputPricePerMillion: 500, outputPricePerMillion: 500, maxOutputTokens: 100, requestTimeoutSeconds: 5
+    });
+    const profileId = saved.body?.profile?.id;
+    const tested = await request(portC, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId });
+    const after = await request(portC, 'GET', '/api/state');
+    const spent = Number(after.body?.settings?.spentToday || 0);
+    if (tested.body?.ok === true) problems.push('没有 Key 时测试不应成功');
+    if (spent !== 0) problems.push(`没有 Key 却扣了 ¥${spent}（未发出请求不应计费）`);
+    if (providerC.state.requests !== 0) problems.push(`没有 Key 却请求了供应商 ${providerC.state.requests} 次`);
+  } finally {
+    await stop(serverC);
+    providerC.server.close();
+    fs.rmSync(dataC, { recursive: true, force: true });
+  }
+
+  // ---------- 场景 D：崩溃恢复（journal 里的 held 票据要补账，settled 不重复计） ----------
+  const dataD = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `billing-d-${process.pid}`);
+  fs.rmSync(dataD, { recursive: true, force: true });
+  fs.mkdirSync(dataD, { recursive: true });
+  // 手工写一个「上次崩在落盘前」的状态：一张 held、一张已 settled
+  const seed = {
+    version: 2,
+    mode: 'workflow-agent',
+    settings: {
+      budgetJournal: [
+        { id: 'hold_crash_held', kind: 'text', amount: 0.6, purpose: '崩溃前未结清', status: 'held', createdAt: new Date().toISOString() },
+        { id: 'hold_crash_settled', kind: 'text', amount: 0.9, purpose: '已结算', status: 'settled', actualCost: 0.9, createdAt: new Date().toISOString() }
+      ]
+    }
+  };
+  fs.writeFileSync(path.join(dataD, 'state.json'), JSON.stringify(seed, null, 2), 'utf8');
+  const portD = 19100 + (process.pid % 80);
+  const serverD = startServer(dataD, portD);
+  try {
+    await waitForHealth(portD, Date.now() + 30000);
+    const after = await request(portD, 'GET', '/api/state');
+    const spent = Number(after.body?.settings?.spentToday || 0);
+    if (Math.abs(spent - 0.6) > 0.001) problems.push(`崩溃恢复应只补 held 的 ¥0.6，实际 ¥${spent}`);
+  } finally {
+    await stop(serverD);
+    fs.rmSync(dataD, { recursive: true, force: true });
+  }
+
+  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 4, problems }, null, 2));
   if (problems.length) process.exitCode = 1;
 }
 

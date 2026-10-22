@@ -16,7 +16,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
-const ALLOWED_FALSE_POSITIVES = new Set(['server', 'handleAction', 'json']);
+// budgetJournal 只在 lib/state.cjs 里以字符串键出现（公开状态剔除内部字段），不是依赖
+const ALLOWED_FALSE_POSITIVES = new Set(['server', 'handleAction', 'json', 'budgetJournal']);
 
 const serverText = fs.readFileSync(path.join(ROOT, 'server.cjs'), 'utf8').replace(/\r\n/g, '\n');
 const topLevel = new Set();

@@ -448,33 +448,30 @@ function estimateCost(kind, usage = {}, connection = activeConnection(kind)) {
   return Number((input + output).toFixed(4));
 }
 function recordAiUsage(usage, purpose, holdId = '') {
-  if (holdId) {
-    const closed = finalizeHold(holdId, 'settled');
-    if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
-  }
+  const closed = holdId ? settleHold(holdId, 'settled') : null;
+  if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
   const cost = estimateCost('text', usage);
   state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
+  if (holdId) { try { budgetTxnSave(); } catch {} }
   return cost;
 }
 function recordVisionUsage(usage, purpose, holdId = '') {
-  if (holdId) {
-    const closed = finalizeHold(holdId, 'settled');
-    if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
-  }
+  const closed = holdId ? settleHold(holdId, 'settled') : null;
+  if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
   const cost = estimateCost('vision', usage);
   state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `视觉输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
+  if (holdId) { try { budgetTxnSave(); } catch {} }
   return cost;
 }
 function recordImageUsage(usage, purpose, holdId = '') {
-  if (holdId) {
-    const closed = finalizeHold(holdId, 'settled');
-    if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
-  }
+  const closed = holdId ? settleHold(holdId, 'settled') : null;
+  if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
   const cost = Number((estimateCost('image', usage) + Number(state.settings.imageCostPerImage || 0)).toFixed(4));
   state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `计费 ¥${cost.toFixed(4)}`);
+  if (holdId) { try { budgetTxnSave(); } catch {} }
   return cost;
 }
 function estimatedCallCost(kind, inputChars, maxOutputTokens) {
@@ -484,19 +481,33 @@ function estimatedCallCost(kind, inputChars, maxOutputTokens) {
   const outputPrice = Number(connection.outputPricePerMillion) || 0;
   return approximateInputTokens / 1000000 * inputPrice + Number(maxOutputTokens || 0) / 1000000 * outputPrice;
 }
-// 预算：一次真实收费调用 = 一张票据 + 一次幂等结算（台账见 lib/budget.cjs）。
+// 预算：一次真实收费调用 = 一张票据 + 一次原子落盘（票据与当日消费写在同一份 state.json 里）。
+// 之前用独立的 budget-holds.json，会出现"票据已清空、费用还没写盘"的丢账窗口。
 const { createBudgetLedger, createSpendGuard } = require('./lib/budget.cjs');
 const { retryWithBudget } = require('./lib/retry.cjs');
 const budgetLedger = createBudgetLedger();
 const operationRegistry = require('./lib/operations.cjs').createOperationRegistry();
 const BUDGET_HOLD_TTL_MS = 5 * 60 * 1000;
+
+// 交易日志：随 state.json 一起落盘，重启后可据此保守补账。
+let budgetJournal = [];
+function pruneJournal() {
+  const keep = budgetJournal.slice(-200);
+  budgetJournal = keep;
+  state.settings.budgetJournal = keep;
+}
+function budgetTxnSave() {
+  if (process.env.CONTENTOPS_SIMULATE_BUDGET_PERSIST_FAILURE === '1') throw new Error('模拟落盘失败（测试用）');
+  pruneJournal();
+  saveState();
+}
+
 const budgetGuard = createSpendGuard({
   ledger: budgetLedger,
   budgetOf: (kind) => (kind === 'vision' ? Number(state.settings.visionDailyBudget) : kind === 'image' ? Number(state.settings.imageDailyBudget) : Number(state.settings.dailyBudget)),
   spentOf: (kind) => (kind === 'vision' ? Number(state.settings.visionSpentToday) : kind === 'image' ? Number(state.settings.imageSpentToday) : Number(state.settings.spentToday))
 });
 
-// 所有「可能已经花掉的钱」都从这里入业务账本（成功走 record*Usage，失败/未知走这里）。
 function chargeToSpent(kind, amount, note = '') {
   const value = Number(Math.max(0, Number(amount) || 0).toFixed(4));
   if (!value) return 0;
@@ -507,57 +518,49 @@ function chargeToSpent(kind, amount, note = '') {
   return value;
 }
 
-// 票据落盘：进程崩了也要知道"可能有未结清的费用"
-const BUDGET_HOLDS_FILE = path.join(DATA_DIR, 'budget-holds.json');
-let budgetPersistenceBroken = false;
-function persistBudgetHolds() {
-  try {
-    if (process.env.CONTENTOPS_SIMULATE_BUDGET_PERSIST_FAILURE === '1') throw new Error('模拟落盘失败（测试用）');
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const payload = JSON.stringify(budgetLedger.snapshot().tickets, null, 2);
-    const temporary = `${BUDGET_HOLDS_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, payload, 'utf8');
-    try {
-      const handle = fs.openSync(temporary, 'r');
-      try { fs.fsyncSync(handle); } catch {} finally { fs.closeSync(handle); }
-    } catch {}
-    fs.renameSync(temporary, BUDGET_HOLDS_FILE);
-    budgetPersistenceBroken = false;
-    return true;
-  } catch (error) {
-    // 落盘失败意味着崩溃后可能重复或漏记账，宁可停下收费也不能装作没事。
-    budgetPersistenceBroken = true;
-    addActivity('warning', '预算票据落盘失败', `已暂停新的收费调用：${error.message}`);
-    return false;
-  }
-}
-// 启动时把上次未结清的票据按保守口径入账（它们代表的请求可能已经发出并计费）
+// 启动恢复：日志里仍是 held 的票据，说明上次在"请求发出后、落盘前"中断，按估算保守补账。
+// settled / uncertain / cancelled 都已随同一次写盘入账，不再重复计。
 function recoverBudgetHolds() {
   try {
-    if (!fs.existsSync(BUDGET_HOLDS_FILE)) return;
-    const pending = JSON.parse(fs.readFileSync(BUDGET_HOLDS_FILE, 'utf8'));
+    const journal = Array.isArray(state.settings.budgetJournal) ? state.settings.budgetJournal : [];
+    budgetJournal = journal.slice(-200);
     let recovered = 0;
-    for (const ticket of Array.isArray(pending) ? pending : []) {
-      const amount = Number(ticket?.amount) || 0;
-      const kind = ['text', 'vision', 'image'].includes(ticket?.kind) ? ticket.kind : 'text';
-      if (amount > 0) { chargeToSpent(kind, amount, `崩溃恢复：${ticket?.purpose || ''}`); recovered += 1; }
+    for (const entry of budgetJournal) {
+      if (entry.status !== 'held') continue;
+      const amount = Number(entry.amount) || 0;
+      const kind = ['text', 'vision', 'image'].includes(entry.kind) ? entry.kind : 'text';
+      if (amount > 0) { chargeToSpent(kind, amount, `崩溃恢复：${entry.purpose || ''}`); recovered += 1; }
+      entry.status = 'recovered';
+      entry.closedAt = now();
     }
+    state.settings.budgetJournal = budgetJournal;
     if (recovered) {
-      addActivity('warning', '已恢复未结清预算', `上次未结清 ${recovered} 笔，已按保守口径计入当日消费`);
-      // 先把恢复结果落盘，再删待恢复文件；否则崩溃会导致重复入账。
+      addActivity('warning', '已恢复未结清预算', `上次中断时有 ${recovered} 笔未结清，已按保守口径计入当日消费`);
       saveState();
     }
-    fs.rmSync(BUDGET_HOLDS_FILE, { force: true });
   } catch {}
 }
 
-// 唯一的票据终结入口：成功由 record*Usage 入账；失败/未知按估算保守入账；未发出才不计费。
-function finalizeHold(holdId, outcome = 'settled') {
+// 票据终结：只改日志与内存账本，不写盘；由调用方在同一次 saveState 里落盘（保证原子）。
+function settleHold(holdId, outcome = 'settled', actualCost = 0) {
   if (!holdId) return { ok: false, code: 'NO_HOLD' };
   const closed = budgetLedger.finalize(holdId, outcome);
   if (!closed.ok) return closed;
-  if (outcome !== 'settled' && outcome !== 'cancelled' && closed.amount > 0) chargeToSpent(closed.kind, closed.amount, closed.purpose);
-  persistBudgetHolds();
+  const entry = budgetJournal.find((item) => item.id === holdId);
+  if (entry) {
+    entry.status = outcome === 'settled' ? 'settled' : outcome === 'cancelled' ? 'cancelled' : 'uncertain';
+    entry.actualCost = Number(actualCost) || 0;
+    entry.closedAt = now();
+  }
+  if (outcome !== 'settled' && outcome !== 'cancelled' && closed.amount > 0) {
+    chargeToSpent(closed.kind, closed.amount, closed.purpose);
+  }
+  return closed;
+}
+// 兼容旧调用点：终结 + 立刻落盘
+function finalizeHold(holdId, outcome = 'settled') {
+  const closed = settleHold(holdId, outcome);
+  if (closed?.ok) { try { budgetTxnSave(); } catch {} }
   return closed;
 }
 
@@ -565,14 +568,12 @@ function reapExpiredHolds() {
   let changed = false;
   for (const expired of budgetLedger.sweepExpired()) {
     chargeToSpent(expired.kind, expired.amount, `超时未结清：${expired.purpose || ''}`);
+    const entry = budgetJournal.find((item) => item.id === expired.id);
+    if (entry) { entry.status = 'expired'; entry.closedAt = now(); }
     addActivity('warning', '预算预留超时', `${expired.purpose || '未知调用'} 未按时结清，已按保守口径计入 ¥${expired.amount.toFixed(4)}`);
     changed = true;
   }
-  if (changed) {
-    // 顺序：先落业务状态，再落票据文件。任一步失败都不会出现"钱记了但票据还在"。
-    try { saveState(); } catch {}
-    persistBudgetHolds();
-  }
+  if (changed) { try { budgetTxnSave(); } catch {} }
 }
 
 function budgetRemainingAfterHolds(kind) {
@@ -580,41 +581,44 @@ function budgetRemainingAfterHolds(kind) {
   return budgetGuard.remainingOf(kind);
 }
 
-// 按显式金额预留：用于「被测档案的价格」与「当前激活档案」不同的场景（连接测试）。
-function reserveExact(kind, amount, purpose) {
-  if (budgetPersistenceBroken) return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已暂停新的收费调用；请检查磁盘后重启' };
+// 预留：先写日志并落盘，落盘成功才允许发请求。
+function reserveBudget(kind, amount, purpose) {
   reapExpiredHolds();
   const estimate = Number(Math.max(0, Number(amount) || 0).toFixed(6));
   const hold = budgetGuard.reserve({ kind, amount: estimate, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
   if (!hold.ok) return hold;
-  if (!persistBudgetHolds()) {
+  budgetJournal.push({ id: hold.id, kind, amount: estimate, purpose, status: 'held', createdAt: now() });
+  try {
+    budgetTxnSave();
+  } catch (error) {
     budgetLedger.cancel(hold.id);
+    budgetJournal = budgetJournal.filter((item) => item.id !== hold.id);
+    state.settings.budgetJournal = budgetJournal;
+    addActivity('warning', '预算票据落盘失败', `已拒绝本次收费调用：${error.message}`);
     return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已拒绝本次收费调用' };
   }
   return { ok: true, id: hold.id, estimate };
 }
 
+// 按显式金额预留：用于「被测档案的价格」与「当前激活档案」不同的场景（连接测试）。
+function reserveExact(kind, amount, purpose) { return reserveBudget(kind, amount, purpose); }
+
 // fixedCost：按张固定费用（生图按张计费时必须算进预留）。
 function reserveCall(kind, inputChars, maxOutputTokens, purpose, fixedCost = 0) {
-  if (budgetPersistenceBroken) return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已暂停新的收费调用；请检查磁盘后重启' };
-  reapExpiredHolds();
   const amount = Number((estimatedCallCost(kind, inputChars, maxOutputTokens) + Math.max(0, Number(fixedCost) || 0)).toFixed(6));
-  const hold = budgetGuard.reserve({ kind, amount, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
+  const hold = reserveBudget(kind, amount, purpose);
   if (!hold.ok) return hold;
-  if (!persistBudgetHolds()) {
-    // 落盘失败：本次请求一律不发，票据作废（不代表没花钱，但没发请求就不会花）。
-    budgetLedger.cancel(hold.id);
-    return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已拒绝本次收费调用' };
-  }
   return {
     ok: true,
     id: hold.id,
-    estimate: amount,
-    settle: (actualCost) => budgetLedger.settle(hold.id, { actualCost }),
-    abandon: () => budgetLedger.abandon(hold.id),
-    cancel: () => budgetLedger.cancel(hold.id)
+    estimate: hold.estimate,
+    settle: (actualCost) => settleHold(hold.id, 'settled', actualCost),
+    abandon: () => finalizeHold(hold.id, 'uncertain'),
+    cancel: () => finalizeHold(hold.id, 'cancelled')
   };
 }
+
+
 function workflowSteps() {
   return [
     { id: 'collect', name: '抓取', owner: '抓取 Agent', gate: false },
