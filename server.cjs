@@ -75,6 +75,7 @@ const stateStore = require('./lib/state.cjs')({
   normalizeKeywords, normalizeTextList, normalizeClock, localClock, localDay,
   CREDENTIALS, VISION_CREDENTIALS, FEISHU_CREDENTIALS,
   noteIdFromUrl,
+  reserveCall,
   // 在途任务锁：删除/重置前要用它判断有没有任务持有该实体
   get imageJobLocks() { return imageJobLocks; },
   // 下面这些在 server.cjs 里声明得晚，只在调用时取值，避免 TDZ
@@ -449,22 +450,22 @@ function estimateCost(kind, usage = {}, connection = activeConnection(kind)) {
   const output = Number(usage.outputTokens || 0) / 1000000 * Number(connection.outputPricePerMillion || 0);
   return Number((input + output).toFixed(4));
 }
-function recordAiUsage(usage, purpose) {
-  settleBudget('text');
+function recordAiUsage(usage, purpose, holdId = '') {
+  if (holdId) budgetLedger.settle(holdId, { actualCost: estimateCost('text', usage) });
   const cost = estimateCost('text', usage);
   state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
-function recordVisionUsage(usage, purpose) {
-  settleBudget('vision');
+function recordVisionUsage(usage, purpose, holdId = '') {
+  if (holdId) budgetLedger.settle(holdId, { actualCost: estimateCost('vision', usage) });
   const cost = estimateCost('vision', usage);
   state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `视觉输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
-function recordImageUsage(usage, purpose) {
-  settleBudget('image');
+function recordImageUsage(usage, purpose, holdId = '') {
+  if (holdId) budgetLedger.settle(holdId, { actualCost: Number((estimateCost('image', usage) + Number(state.settings.imageCostPerImage || 0)).toFixed(4)) });
   const cost = Number((estimateCost('image', usage) + Number(state.settings.imageCostPerImage || 0)).toFixed(4));
   state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `计费 ¥${cost.toFixed(4)}`);
@@ -477,30 +478,45 @@ function estimatedCallCost(kind, inputChars, maxOutputTokens) {
   const outputPrice = Number(connection.outputPricePerMillion) || 0;
   return approximateInputTokens / 1000000 * inputPrice + Number(maxOutputTokens || 0) / 1000000 * outputPrice;
 }
-// 预算：每次调用开一张票据（lib/budget.cjs），按种类分别记账。
-// 结清按先进先出、只退自己那一张；过期不静默释放，而是保守计入已消费。
-const budgetLedger = require('./lib/budget.cjs').createBudgetLedger();
+// 预算：一次真实收费调用 = 一张票据 + 一次幂等结算（台账见 lib/budget.cjs）。
+const { createBudgetLedger, createSpendGuard } = require('./lib/budget.cjs');
+const budgetLedger = createBudgetLedger();
 const BUDGET_HOLD_TTL_MS = 5 * 60 * 1000;
+const budgetGuard = createSpendGuard({
+  ledger: budgetLedger,
+  budgetOf: (kind) => (kind === 'vision' ? Number(state.settings.visionDailyBudget) : kind === 'image' ? Number(state.settings.imageDailyBudget) : Number(state.settings.dailyBudget)),
+  spentOf: (kind) => (kind === 'vision' ? Number(state.settings.visionSpentToday) : kind === 'image' ? Number(state.settings.imageSpentToday) : Number(state.settings.spentToday))
+});
 
-function settleBudget(kind) { return budgetLedger.retire(kind); }
-function budgetRemainingAfterHolds(kind) {
-  // 过期票据视为可能已经花掉：直接计入当日已消费，避免预算凭空变大。
+// 过期票据按「可能已经花掉」保守入账，绝不放回额度。
+function reapExpiredHolds() {
   for (const expired of budgetLedger.sweepExpired()) {
     if (expired.kind === 'vision') state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + expired.amount).toFixed(4));
     else if (expired.kind === 'image') state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + expired.amount).toFixed(4));
     else state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + expired.amount).toFixed(4));
-    addActivity('warning', '预算预留超时', `${expired.purpose || '未知调用'} 未在时限内结清，已按保守口径计入 ¥${expired.amount.toFixed(4)}`);
+    addActivity('warning', '预算预留超时', `${expired.purpose || '未知调用'} 未按时结清，已按保守口径计入 ¥${expired.amount.toFixed(4)}`);
   }
-  const base = kind === 'vision' ? visionBudgetRemaining() : kind === 'image' ? imageBudgetRemaining() : budgetRemaining();
-  return Math.max(0, base - budgetLedger.heldOf(kind));
 }
-// fixedCost：按张固定费用（生图按张计费时必须算进预留），否则 token 价为 0 时预留恒为 0。
+
+function budgetRemainingAfterHolds(kind) {
+  reapExpiredHolds();
+  return budgetGuard.remainingOf(kind);
+}
+
+// fixedCost：按张固定费用（生图按张计费时必须算进预留）。
 function reserveCall(kind, inputChars, maxOutputTokens, purpose, fixedCost = 0) {
-  const remaining = budgetRemainingAfterHolds(kind);
-  const estimate = Number((estimatedCallCost(kind, inputChars, maxOutputTokens) + Math.max(0, Number(fixedCost) || 0)).toFixed(6));
-  if (estimate > remaining) return { ok: false, code: kind === 'vision' ? 'VISION_BUDGET_LIMIT' : kind === 'image' ? 'IMAGE_BUDGET_LIMIT' : 'TEXT_BUDGET_LIMIT', message: `${purpose}预计最高费用 ¥${estimate.toFixed(4)}，超过剩余预算 ¥${remaining.toFixed(4)}` };
-  const hold = budgetLedger.reserve({ kind, amount: estimate, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
-  return { ok: true, estimate, id: hold.id, release: () => budgetLedger.retire(kind) };
+  reapExpiredHolds();
+  const amount = Number((estimatedCallCost(kind, inputChars, maxOutputTokens) + Math.max(0, Number(fixedCost) || 0)).toFixed(6));
+  const hold = budgetGuard.reserve({ kind, amount, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
+  if (!hold.ok) return hold;
+  return {
+    ok: true,
+    id: hold.id,
+    estimate: amount,
+    settle: (actualCost) => budgetLedger.settle(hold.id, { actualCost }),
+    abandon: () => budgetLedger.abandon(hold.id),
+    cancel: () => budgetLedger.cancel(hold.id)
+  };
 }
 function workflowSteps() {
   return [
@@ -1089,13 +1105,13 @@ async function analyzeCandidate(candidate) {
     if (candidate.textAnalysis && candidate.textFingerprint === crypto.createHash('sha256').update(`${activeModelFingerprint('text')}|${textPrompt}`).digest('hex')) return { cost:0, cached:true };
     const reservation = reserveCall('text', textPrompt.length + SYSTEM.length, 2500, '候选文本初析'); if (!reservation.ok) throw new Error(reservation.message);
     const result = await withApiRetry(candidate, 'text', () => callJson({ ...activeConnection('text'), system:SYSTEM, prompt:textPrompt, maxOutputTokens:Math.min(outputTokenLimit('text', 2500), 2500), timeoutMs:activeConnection('text').requestTimeoutMs }));
-    if (masterStopped(generation)) return stopResult(); candidate.textAnalysis = result.data; candidate.textFingerprint = crypto.createHash('sha256').update(`${activeModelFingerprint('text')}|${textPrompt}`).digest('hex'); candidate.textAnalyzedAt = now(); candidate.analysisTask.text = { status:'completed', attempts:Number(candidate.analysisTask.text?.attempts || 0), updatedAt:now() }; return { cost:recordAiUsage(result.usage, '候选文本初析') };
+    if (masterStopped(generation)) return stopResult(); candidate.textAnalysis = result.data; candidate.textFingerprint = crypto.createHash('sha256').update(`${activeModelFingerprint('text')}|${textPrompt}`).digest('hex'); candidate.textAnalyzedAt = now(); candidate.analysisTask.text = { status:'completed', attempts:Number(candidate.analysisTask.text?.attempts || 0), updatedAt:now() }; return { cost:recordAiUsage(result.usage, '候选文本初析', reservation.id) };
   };
   const visionWork = async () => {
     if (candidate.visionAnalysis && candidate.visionFingerprint === fingerprint) return { cost:0, cached:true };
     const visionPrompt = candidateVisionPrompt(candidate, images.length); const reservation = reserveCall('vision', visionPrompt.length + images.length * 2000, 3500, '候选视觉拆解'); if (!reservation.ok) throw new Error(reservation.message);
     const result = await withApiRetry(candidate, 'vision', () => callVisionJson({ ...activeConnection('vision'), prompt:visionPrompt, imageUrls:images, maxOutputTokens:Math.min(outputTokenLimit('vision', 3500), 3500), timeoutMs:activeConnection('vision').requestTimeoutMs }));
-    if (masterStopped(generation)) return stopResult(); candidate.visionAnalysis = normalizeVisionAnalysis(result.data); candidate.visionFingerprint = fingerprint; candidate.visionAnalyzedAt = now(); candidate.visionImageCount = result.imageCount; candidate.analysisTask.vision = { status:'completed', attempts:Number(candidate.analysisTask.vision?.attempts || 0), updatedAt:now() }; return { cost:recordVisionUsage(result.usage, '候选视觉拆解') };
+    if (masterStopped(generation)) return stopResult(); candidate.visionAnalysis = normalizeVisionAnalysis(result.data); candidate.visionFingerprint = fingerprint; candidate.visionAnalyzedAt = now(); candidate.visionImageCount = result.imageCount; candidate.analysisTask.vision = { status:'completed', attempts:Number(candidate.analysisTask.vision?.attempts || 0), updatedAt:now() }; return { cost:recordVisionUsage(result.usage, '候选视觉拆解', reservation.id) };
   };
   const [textDone, visionDone] = await Promise.all([textWork(), visionWork()]);
   if (textDone?.code === 'MASTER_STOPPED' || visionDone?.code === 'MASTER_STOPPED') return stopResult();
@@ -1108,7 +1124,7 @@ async function analyzeCandidate(candidate) {
   candidate.structure = (Array.isArray(synthesis.data?.structure) ? synthesis.data.structure : []).map((item) => safeText(item, 120)).filter(Boolean).slice(0, 6);
   candidate.analysis = { ...normalizeAnalysis(synthesis.data), productionBlueprint: synthesis.data?.productionBlueprint || {} };
   candidate.analysisStatus = 'completed'; candidate.analyzedAt = now(); state.settings.analysesToday += 1;
-  const synthesisCost = recordAiUsage(synthesis.usage, '候选综合复审'); const cost = textCost + visionCost + synthesisCost;
+  const synthesisCost = recordAiUsage(synthesis.usage, '候选综合复审', synthesisReservation?.id || ''); const cost = textCost + visionCost + synthesisCost;
   setAgent('analyst', { status: 'healthy', detail: `最近完成：${candidate.title} · ${candidate.score}分` }); saveState();
   return { ok: true, candidate, cost, textCost: textCost + synthesisCost, visionCost };
 }
@@ -1456,7 +1472,7 @@ async function generateWithAi(candidate, count = state.settings.generationCount,
   }
   const assetIds = new Set(usableAssets.map((asset) => asset.id));
   if (variants.some((variant) => (variant.enterpriseGrounding?.assetIds || []).some((id) => !assetIds.has(id)))) throw new Error('模型返回了不存在的参考图片编号，结果未写入；请重试一做');
-  const cost = recordAiUsage(result.usage, '图文策划'); state.settings.generationsToday += variants.length;
+  const cost = recordAiUsage(result.usage, '图文策划', reservation.id); state.settings.generationsToday += variants.length;
   candidate.creationTask ||= {}; Object.assign(candidate.creationTask, { status:'completed', attempts:attempt + 1, lastError:'', nextRetryAt:'', completedAt:now(), updatedAt:now() });
   setAgent('creator', { status: 'idle', detail: `最近完成 ${variants.length} 套策划稿，等待人工编辑和生图` }); return { ok: true, variants, cost };
 }
@@ -1468,7 +1484,7 @@ async function analyzePerformanceWithAi(variant, metrics, baseline = {}, options
   const result = await callJson({ baseUrl: activeConnection('text').baseUrl, apiKey: activeConnection('text').apiKey, model: activeConnection('text').model, system: `${SYSTEM}\n你负责发布数据复盘，必须基于给定数据判断。`, prompt, temperature: 0.2, maxOutputTokens });
   const allowed = ['scale', 'test', 'stop']; const fallback = calculateDecision(metrics, baseline, Boolean(options.final)); const decision = allowed.includes(result.data?.decision) ? result.data.decision : fallback;
   const analysis = { decision: options.final ? decision : (decision === 'scale' ? 'test' : decision), reason: safeText(result.data?.reason, 800), winningElements: (Array.isArray(result.data?.winningElements) ? result.data.winningElements : []).map((item) => safeText(item, 160)).slice(0, 5), nextDirections: (Array.isArray(result.data?.nextDirections) ? result.data.nextDirections : []).map((item) => safeText(item, 180)).slice(0, 5), keep: normalizeTextList(result.data?.keep, 5, 180), change: normalizeTextList(result.data?.change, 5, 180), evidence: normalizeTextList(result.data?.evidence, 6, 220), baseline, stage: options.final ? 'final' : 'observation', confidence: finiteNumber(result.data?.confidence, 0, 0, 100) };
-  const cost = recordAiUsage(result.usage, '二次分析'); return { ok: true, analysis, cost };
+  const cost = recordAiUsage(result.usage, '二次分析', reservation.id); return { ok: true, analysis, cost };
 }
 
 async function generateForSelectedCandidate(candidate) {
@@ -1722,8 +1738,8 @@ async function reviewGeneratedImage(item, page, rules, enterprise) {
   if (!reservation.ok) return { score: 0, passed: false, summary: reservation.message, strengths: [], problems: [], retryPrompt: '', checkedAt: now(), model: '', attempts: 0 };
   let result;
   try { result = await callVisionJson({ ...connection, prompt, imageUrls:[imageUrl], allowDataImages:true, timeoutMs:Math.min(connection.requestTimeoutMs || 120000, rules.singleTimeoutMs), maxOutputTokens:Math.min(outputTokenLimit('vision', 1800), 1800) });
-  } finally { reservation.release?.(); }
-  recordVisionUsage(result.usage, `第${page.index}页视觉质检`);
+  } catch (error) { reservation.abandon?.(); throw error; }
+  recordVisionUsage(result.usage, `第${page.index}页视觉质检`, reservation.id);
   const data = result.data || {};
   const score = finiteNumber(data.score, 0, 0, 100);
   return { score, passed:Boolean(data.passed) && score >= rules.qualityThreshold, summary:safeText(data.summary, 800), strengths:normalizeTextList(data.strengths, 8, 200), problems:normalizeTextList(data.problems, 10, 240), retryPrompt:safeText(data.retryPrompt, 6000), checkedAt:now(), model:activeConnection('vision').model, attempts:finiteNumber(page.quality?.attempts, 0, 0, 10) + 1 };
@@ -1787,12 +1803,12 @@ function startVariantImageJob(item, pageIds = [], options = {}) {
           for (let attempt = 0; attempt <= rules.autoRetryCount; attempt += 1) {
             const reservation = reserveCall('image', prompt.length, 0, `第${page.index}页生图`, Number(state.settings.imageCostPerImage || 0)); if (!reservation.ok) throw new Error(reservation.message);
             let result; try { result = await generateImage({ ...connection, inputMode:effectiveInputMode, referenceImages, prompt, size:rules.size, timeoutMs:Math.min(connection.requestTimeoutMs || rules.singleTimeoutMs, rules.singleTimeoutMs) });
-            } finally { reservation.release?.(); }
+            } catch (error) { reservation.abandon?.(); throw error; }
     result.referenceMode = effectiveInputMode; result.referenceAssetIds = referenceAssetIds;
             if (masterStopped(generation)) { failImageJob(item, 'cancelled', '人工总控已停止；当前返回图片不会写入'); return; }
             const priorAsset = page.asset;
             const generatedAsset = await persistGeneratedImage(item, page, result, Math.min(connection.requestTimeoutMs || rules.singleTimeoutMs, rules.singleTimeoutMs));
-            page.asset = generatedAsset; page.generationError = ''; cost += recordImageUsage(result.usage, `第${page.index}页生图`); state.settings.imageGenerationsToday += 1;
+            page.asset = generatedAsset; page.generationError = ''; cost += recordImageUsage(result.usage, `第${page.index}页生图`, reservation.id); state.settings.imageGenerationsToday += 1;
             try { saveStateWithGeneratedImageCleanup([priorAsset?.file]); }
             catch (error) { discardGeneratedImageFile(generatedAsset.file); throw error; }
             page.quality = await reviewGeneratedImage(item, page, rules, enterprise).catch((error) => ({ score:0, passed:false, summary:`视觉质检失败：${error.message}`, strengths:[], problems:['视觉模型未能完成质检'], retryPrompt:'', checkedAt:now(), model:activeConnection('vision').model, attempts:Number(page.quality?.attempts || 0)+1 }));
@@ -1902,7 +1918,9 @@ async function handleAction(route, body) {
     masterGeneration += 1;
     for (const run of state.workflowRuns) cancelOpenRun(run);
     budgetLedger.reset();
-    const generatedFiles = generatedImageFilesFromVariants(state.variants); const keepSettings = SELF_TEST ? null : structuredClone(state.settings); const keepEnterpriseProfiles = SELF_TEST ? [] : structuredClone(state.enterpriseProfiles || []); const keepActiveProfileId = SELF_TEST ? '' : state.activeEnterpriseProfileId; state = initialState(); if (keepSettings) { Object.assign(state.settings, keepSettings, { candidatesToday: 0, analysesToday: 0, generationsToday: 0, spentToday: 0, visionSpentToday: 0, usageDate: DAY() }); state.materials = []; state.enterpriseProfiles = keepEnterpriseProfiles; state.activeEnterpriseProfileId = keepActiveProfileId; } state.candidates = []; state.variants = []; state.publications = []; state.settings.masterEnabled = false; state.settings.collectionEnabled = false; state.settings.workflowAutoEnabled = false; addActivity('info', '已清空本地数据（总控与自动流程已关闭）', keepSettings ? '采集设置、项目资料库与专用浏览器登录资料均已保留' : '测试状态已恢复初始值'); saveStateWithGeneratedImageCleanup(generatedFiles); return { ok: true }; }
+    const generatedFiles = generatedImageFilesFromVariants(state.variants); const keepSettings = SELF_TEST ? null : structuredClone(state.settings); const keepEnterpriseProfiles = SELF_TEST ? [] : structuredClone(state.enterpriseProfiles || []); const keepActiveProfileId = SELF_TEST ? '' : state.activeEnterpriseProfileId; state = initialState(); if (keepSettings) { Object.assign(state.settings, keepSettings, // 只清业务计数；当日消费（spentToday / visionSpentToday / imageSpentToday）一律保留，
+    // 否则「清空数据」就成了绕过每日预算的后门。
+    { candidatesToday: 0, analysesToday: 0, generationsToday: 0, imageGenerationsToday: 0, usageDate: DAY() }); state.materials = []; state.enterpriseProfiles = keepEnterpriseProfiles; state.activeEnterpriseProfileId = keepActiveProfileId; } state.candidates = []; state.variants = []; state.publications = []; state.settings.masterEnabled = false; state.settings.collectionEnabled = false; state.settings.workflowAutoEnabled = false; addActivity('info', '已清空本地数据（总控与自动流程已关闭）', keepSettings ? '采集设置、项目资料库与专用浏览器登录资料均已保留' : '测试状态已恢复初始值'); saveStateWithGeneratedImageCleanup(generatedFiles); return { ok: true }; }
   const handler = actionRoutes.get(route);
   if (handler) return handler(body);
   return { ok: false, message: '未知操作' };
