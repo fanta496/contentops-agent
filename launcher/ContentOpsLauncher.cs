@@ -152,6 +152,10 @@ internal static class ContentOpsLauncher
         AddCandidate(candidates, Registry.GetValue(@"HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", "", null) as string);
         AddCandidate(candidates, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe"));
         AddCandidate(candidates, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe"));
+                    AddCandidate(candidates, Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe", "", null) as string);
+                    AddCandidate(candidates, Registry.GetValue(@"HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe", "", null) as string);
+                    AddCandidate(candidates, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"));
+                    AddCandidate(candidates, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"));
         AddCandidate(candidates, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Google", "Chrome", "Application", "chrome.exe"));
         foreach (string candidate in candidates)
         {
@@ -165,8 +169,8 @@ internal static class ContentOpsLauncher
 
         using (var dialog = new OpenFileDialog())
         {
-            dialog.Title = "首次环境检查：请选择 chrome.exe";
-            dialog.Filter = "Chrome (chrome.exe)|chrome.exe|可执行文件 (*.exe)|*.exe";
+            dialog.Title = "首次环境检查：请选择 Chrome 或 Edge（Chromium 内核浏览器）";
+            dialog.Filter = "Chromium 浏览器 (chrome.exe;msedge.exe)|chrome.exe;msedge.exe|可执行文件 (*.exe)|*.exe";
             dialog.CheckFileExists = true;
             dialog.Multiselect = false;
             if (dialog.ShowDialog() == DialogResult.OK && ValidateChrome(dialog.FileName))
@@ -175,9 +179,9 @@ internal static class ContentOpsLauncher
                 diagnostic = String.Empty;
                 return dialog.FileName;
             }
-            if (dialog.FileName.Length > 0) MessageBox.Show("所选文件不是可用的 chrome.exe。请选择 Google Chrome 的 chrome.exe 文件。", "图文爆款Agent · 首次环境检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (dialog.FileName.Length > 0) MessageBox.Show("所选文件不是可用的浏览器。请选择 Chrome 或 Edge（msedge.exe）的执行文件。", "图文爆款Agent · 首次环境检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        diagnostic = "启动前检查未通过：未找到可用 Chrome。\n\n已检查：\n" + String.Join("\n", candidates.ToArray()) + "\n\n请重新启动后，在“首次环境检查”窗口中选择 chrome.exe。选择成功后会保存到本机配置，后续启动只做快速验证。";
+        diagnostic = "启动前检查未通过：未找到可用的 Chromium 浏览器（Chrome 或 Edge）。\n\n已检查：\n" + String.Join("\n", candidates.ToArray()) + "\n\n请重新启动后，在“首次环境检查”窗口中选择 chrome.exe。选择成功后会保存到本机配置，后续启动只做快速验证。";
         return String.Empty;
     }
 
@@ -193,7 +197,14 @@ internal static class ContentOpsLauncher
     {
         try
         {
-            if (String.IsNullOrWhiteSpace(candidate) || !Path.GetFileName(candidate).Equals("chrome.exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(candidate)) return false;
+            // 允许 Chromium 家族：本机没装 Chrome 时用户会选 Edge，写死 chrome.exe 等于让这个选项失效。
+                string fileName = String.IsNullOrWhiteSpace(candidate) ? String.Empty : Path.GetFileName(candidate);
+                bool chromiumName = fileName.Equals("chrome.exe", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals("msedge.exe", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals("brave.exe", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals("chromium.exe", StringComparison.OrdinalIgnoreCase)
+                    || fileName.Equals("vivaldi.exe", StringComparison.OrdinalIgnoreCase);
+                if (String.IsNullOrWhiteSpace(candidate) || !chromiumName || !File.Exists(candidate)) return false;
             using (var stream = new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) return stream.Length > 0;
         }
         catch { return false; }
@@ -222,7 +233,7 @@ internal static class ContentOpsLauncher
         {
             Directory.CreateDirectory(dataDirectory);
             string value = chrome.Replace("\\", "\\\\").Replace("\"", "\\\"");
-            File.WriteAllText(RuntimeConfigFile(dataDirectory), "{\"chromePath\":\"" + value + "\"}", Encoding.UTF8);
+            File.WriteAllText(RuntimeConfigFile(dataDirectory), "{\"chromePath\":\"" + value + "\"}", new UTF8Encoding(false));
         }
         catch { }
     }

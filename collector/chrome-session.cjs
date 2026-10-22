@@ -174,7 +174,7 @@ class PipeBrowser {
   }
 
   async start(url) {
-    if (!this.exists(this.chromePath)) throw new Error(this.chromeDiagnostic || `没有找到Chrome：${this.chromePath}`);
+    if (!this.exists(this.chromePath)) throw new Error(this.chromeDiagnostic || `没有找到可用的浏览器（Chrome/Edge）：${this.chromePath}`);
     fs.mkdirSync(this.profileDir, { recursive: true });
     const args = [
       '--remote-debugging-pipe',
