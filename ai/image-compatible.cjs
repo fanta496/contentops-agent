@@ -64,7 +64,9 @@ async function publicImageUrl(value) {
 
 async function downloadImageUrl(value, timeoutMs) {
   const url = await publicImageUrl(value);
-  const response = await fetch(url, { signal:AbortSignal.timeout(timeoutMs) });
+  // 不跟随重定向：供应商返回 30x 时直接失败。否则可以把 https 外链 302 到内网地址，
+  // publicImageUrl 里的 DNS/IP 校验只对第一跳有效。
+  const response = await fetch(url, { signal:AbortSignal.timeout(timeoutMs), redirect:'error' });
   if (!response.ok) throw new Error(`生图供应商返回的图片 URL 无法下载：HTTP ${response.status}`);
   const declaredLength = Number(response.headers.get('content-length') || 0);
   if (declaredLength > 25 * 1024 * 1024) throw new Error('生图供应商返回图片超过 25MB 安全上限');

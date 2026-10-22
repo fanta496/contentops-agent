@@ -75,6 +75,8 @@ const stateStore = require('./lib/state.cjs')({
   normalizeKeywords, normalizeTextList, normalizeClock, localClock, localDay,
   CREDENTIALS, VISION_CREDENTIALS, FEISHU_CREDENTIALS,
   noteIdFromUrl,
+  // 在途任务锁：删除/重置前要用它判断有没有任务持有该实体
+  get imageJobLocks() { return imageJobLocks; },
   // 下面这些在 server.cjs 里声明得晚，只在调用时取值，避免 TDZ
   hasFeishuWebhook: (...args) => hasFeishuWebhook(...args),
   normalizeImageRules: (...args) => normalizeImageRules(...args),
@@ -448,18 +450,21 @@ function estimateCost(kind, usage = {}, connection = activeConnection(kind)) {
   return Number((input + output).toFixed(4));
 }
 function recordAiUsage(usage, purpose) {
+  settleBudget('text');
   const cost = estimateCost('text', usage);
   state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
 function recordVisionUsage(usage, purpose) {
+  settleBudget('vision');
   const cost = estimateCost('vision', usage);
   state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `视觉输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
 function recordImageUsage(usage, purpose) {
+  settleBudget('image');
   const cost = Number((estimateCost('image', usage) + Number(state.settings.imageCostPerImage || 0)).toFixed(4));
   state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `计费 ¥${cost.toFixed(4)}`);
@@ -472,32 +477,30 @@ function estimatedCallCost(kind, inputChars, maxOutputTokens) {
   const outputPrice = Number(connection.outputPricePerMillion) || 0;
   return approximateInputTokens / 1000000 * inputPrice + Number(maxOutputTokens || 0) / 1000000 * outputPrice;
 }
-// 预算预留台账：并发任务各占一份额度，避免「检查都通过、花钱一起超」。
-// 预留带过期时间（默认 5 分钟），即使某条路径忘了 release 也会自动释放，不会永久卡死预算。
-const budgetHolds = { text: 0, vision: 0, image: 0 };
+// 预算：每次调用开一张票据（lib/budget.cjs），按种类分别记账。
+// 结清按先进先出、只退自己那一张；过期不静默释放，而是保守计入已消费。
+const budgetLedger = require('./lib/budget.cjs').createBudgetLedger();
 const BUDGET_HOLD_TTL_MS = 5 * 60 * 1000;
-const budgetHoldExpiry = { text: 0, vision: 0, image: 0 };
 
-function budgetHeld(kind) {
-  if (budgetHoldExpiry[kind] && Date.now() > budgetHoldExpiry[kind]) { budgetHolds[kind] = 0; budgetHoldExpiry[kind] = 0; }
-  return budgetHolds[kind];
-}
+function settleBudget(kind) { return budgetLedger.retire(kind); }
 function budgetRemainingAfterHolds(kind) {
+  // 过期票据视为可能已经花掉：直接计入当日已消费，避免预算凭空变大。
+  for (const expired of budgetLedger.sweepExpired()) {
+    if (expired.kind === 'vision') state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + expired.amount).toFixed(4));
+    else if (expired.kind === 'image') state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + expired.amount).toFixed(4));
+    else state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + expired.amount).toFixed(4));
+    addActivity('warning', '预算预留超时', `${expired.purpose || '未知调用'} 未在时限内结清，已按保守口径计入 ¥${expired.amount.toFixed(4)}`);
+  }
   const base = kind === 'vision' ? visionBudgetRemaining() : kind === 'image' ? imageBudgetRemaining() : budgetRemaining();
-  return Math.max(0, base - budgetHeld(kind));
+  return Math.max(0, base - budgetLedger.heldOf(kind));
 }
-function releaseBudgetHold(kind, amount) {
-  budgetHolds[kind] = Math.max(0, Number(budgetHolds[kind] || 0) - Number(amount || 0));
-  if (budgetHolds[kind] === 0) budgetHoldExpiry[kind] = 0;
-}
-function reserveCall(kind, inputChars, maxOutputTokens, purpose) {
+// fixedCost：按张固定费用（生图按张计费时必须算进预留），否则 token 价为 0 时预留恒为 0。
+function reserveCall(kind, inputChars, maxOutputTokens, purpose, fixedCost = 0) {
   const remaining = budgetRemainingAfterHolds(kind);
-  const estimate = estimatedCallCost(kind, inputChars, maxOutputTokens);
+  const estimate = Number((estimatedCallCost(kind, inputChars, maxOutputTokens) + Math.max(0, Number(fixedCost) || 0)).toFixed(6));
   if (estimate > remaining) return { ok: false, code: kind === 'vision' ? 'VISION_BUDGET_LIMIT' : kind === 'image' ? 'IMAGE_BUDGET_LIMIT' : 'TEXT_BUDGET_LIMIT', message: `${purpose}预计最高费用 ¥${estimate.toFixed(4)}，超过剩余预算 ¥${remaining.toFixed(4)}` };
-  budgetHolds[kind] = Number((Number(budgetHolds[kind] || 0) + estimate).toFixed(6));
-  budgetHoldExpiry[kind] = Date.now() + BUDGET_HOLD_TTL_MS;
-  const release = () => releaseBudgetHold(kind, estimate);
-  return { ok: true, estimate, release };
+  const hold = budgetLedger.reserve({ kind, amount: estimate, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
+  return { ok: true, estimate, id: hold.id, release: () => budgetLedger.retire(kind) };
 }
 function workflowSteps() {
   return [
@@ -1715,7 +1718,7 @@ async function reviewGeneratedImage(item, page, rules, enterprise) {
   if (!imageUrl) return null;
   const prompt = imageQualityPrompt(item, page, rules, enterprise);
   const connection = activeConnection('vision');
-  const reservation = reserveCall('vision', prompt.length + 2000, 400, `第${page.index}页视觉质检`);
+  const reservation = reserveCall('vision', prompt.length + 2000, 1800, `第${page.index}页视觉质检`);
   if (!reservation.ok) return { score: 0, passed: false, summary: reservation.message, strengths: [], problems: [], retryPrompt: '', checkedAt: now(), model: '', attempts: 0 };
   let result;
   try { result = await callVisionJson({ ...connection, prompt, imageUrls:[imageUrl], allowDataImages:true, timeoutMs:Math.min(connection.requestTimeoutMs || 120000, rules.singleTimeoutMs), maxOutputTokens:Math.min(outputTokenLimit('vision', 1800), 1800) });
@@ -1782,7 +1785,7 @@ function startVariantImageJob(item, pageIds = [], options = {}) {
           let prompt = enrichImagePrompt(item, page, rules, enterprise, effectiveInputMode);
           let accepted = false;
           for (let attempt = 0; attempt <= rules.autoRetryCount; attempt += 1) {
-            const reservation = reserveCall('image', prompt.length, 0, `第${page.index}页生图`); if (!reservation.ok) throw new Error(reservation.message);
+            const reservation = reserveCall('image', prompt.length, 0, `第${page.index}页生图`, Number(state.settings.imageCostPerImage || 0)); if (!reservation.ok) throw new Error(reservation.message);
             let result; try { result = await generateImage({ ...connection, inputMode:effectiveInputMode, referenceImages, prompt, size:rules.size, timeoutMs:Math.min(connection.requestTimeoutMs || rules.singleTimeoutMs, rules.singleTimeoutMs) });
             } finally { reservation.release?.(); }
     result.referenceMode = effectiveInputMode; result.referenceAssetIds = referenceAssetIds;
@@ -1889,10 +1892,17 @@ async function handleAction(route, body) {
   if (route === '/api/variant/scale') { const generation = masterGeneration; if (masterStopped(generation)) return stopResult('人工总控处于停止状态，二做不会启动'); const parent = state.variants.find((x) => x.id === safeText(body.id, 120)); if (!parent) return { ok: false, message: '未找到图文版本' }; if (parent.decision === 'scaled') return { ok: true, existing: true, count: state.variants.filter((x) => x.parentVariantId === parent.id).length, message: '已经进入放大循环' }; if (parent.decision !== 'scale') return { ok: false, message: '只有系统判断为“建议放大”的内容才能进入下一轮' }; const candidate = state.candidates.find((x) => x.id === parent.candidateId); if (!candidate) return { ok: false, message: '没有找到母版来源' }; const run = runForVariant(parent); if (run) { run.status = 'running'; patchRunStep(run, 'scale', { status: 'running', detail: '人工已确认，正在生成二做版本' }); } try { const context = `这是基于已发布胜出版本的二次生产。胜出元素：${JSON.stringify(parent.performanceAnalysis?.winningElements || [])}。下一方向：${JSON.stringify(parent.performanceAnalysis?.nextDirections || [])}`; const scaleCount = state.settings.scaleGenerationCount; const generated = SELF_TEST && !aiReady() ? { ok: true, variants: buildVariants(candidate).slice(0, scaleCount), cost: 0 } : await generateWithAi(candidate, scaleCount, context); if (masterStopped(generation)) return stopResult('人工总控已停止，二做结果不会写入'); if (!generated?.ok || !Array.isArray(generated.variants)) return generated?.code === 'MASTER_STOPPED' ? generated : { ok: false, code: generated?.code || 'AI_ERROR', message: generated?.message || '二做没有返回可用版本' }; const children = generated.variants.map((item, index) => ({ ...item, workflowRunId: run?.id || parent.workflowRunId || '', parentVariantId: parent.id, title: item.title || `${parent.title} · 放大实验${index + 1}` })); state.variants.unshift(...children); parent.decision = 'scaled'; if (run) { run.counts.scaled = (run.counts.scaled || 0) + children.length; run.actualCost += generated.cost || 0; patchRunStep(run, 'scale', { status: 'completed', detail: `已生成 ${children.length} 套二做版本，转入新一轮人工审核` }); finishRun(run, 'completed'); } if (!state.materials.some((x) => x.sourceVariantId === parent.id)) state.materials.unshift({ id: uid('mat'), sourceVariantId: parent.id, type: '胜出内容', name: parent.title, uses: 1, status: '已验证', score: parent.performanceAnalysis?.confidence || 85 }); addActivity('success', '进入二次生产循环', `新增${children.length}个受控变体，母版：${parent.title}`); saveState(); return { ok: true, count: children.length }; } catch (error) { if (run?.status === 'cancelled' || masterStopped(generation)) return stopResult('人工总控已停止，二做结果不会写入'); if (run) { patchRunStep(run, 'scale', { status: 'blocked', detail: error.message }); finishRun(run, 'blocked', error.message); saveState(); } return { ok: false, code: 'AI_ERROR', message: error.message }; } }
   if (route === '/api/data/reset') {
     // 清空数据前必须先让在途任务失效，否则旧任务会继续跑、继续产生费用，甚至把结果写回已清空的状态。
-    if (currentImageJobs().length) return { ok: false, code: 'IMAGE_JOB_RUNNING', message: '还有生图任务在运行；请等它结束或先停止总控，再清空数据，避免清空后仍被计费' };
+    // 真实在途检查：不只是扫描 state.variants 里的状态，还要看进程内的锁与 Promise。
+    const busy = [];
+    if (currentImageJobs().length || imageJobLocks.size) busy.push('生图任务');
+    if (creationJobLocks.size) busy.push('AI 生产任务');
+    if (collectionLocks.size) busy.push('采集任务');
+    if (workflowPromise) busy.push('工作流');
+    if (busy.length) return { ok: false, code: 'TASK_RUNNING', message: `还有${busy.join('、')}在运行；请等它结束或先停止总控，再清空数据，避免清空后仍被计费` };
     masterGeneration += 1;
     for (const run of state.workflowRuns) cancelOpenRun(run);
-    const generatedFiles = generatedImageFilesFromVariants(state.variants); const keepSettings = SELF_TEST ? null : structuredClone(state.settings); const keepEnterpriseProfiles = SELF_TEST ? [] : structuredClone(state.enterpriseProfiles || []); const keepActiveProfileId = SELF_TEST ? '' : state.activeEnterpriseProfileId; state = initialState(); if (keepSettings) { Object.assign(state.settings, keepSettings, { candidatesToday: 0, analysesToday: 0, generationsToday: 0, spentToday: 0, visionSpentToday: 0, usageDate: DAY() }); state.materials = []; state.enterpriseProfiles = keepEnterpriseProfiles; state.activeEnterpriseProfileId = keepActiveProfileId; } state.candidates = []; state.variants = []; state.publications = []; addActivity('info', '已清空本地数据', keepSettings ? '采集设置、项目资料库与专用浏览器登录资料均已保留' : '测试状态已恢复初始值'); saveStateWithGeneratedImageCleanup(generatedFiles); return { ok: true }; }
+    budgetLedger.reset();
+    const generatedFiles = generatedImageFilesFromVariants(state.variants); const keepSettings = SELF_TEST ? null : structuredClone(state.settings); const keepEnterpriseProfiles = SELF_TEST ? [] : structuredClone(state.enterpriseProfiles || []); const keepActiveProfileId = SELF_TEST ? '' : state.activeEnterpriseProfileId; state = initialState(); if (keepSettings) { Object.assign(state.settings, keepSettings, { candidatesToday: 0, analysesToday: 0, generationsToday: 0, spentToday: 0, visionSpentToday: 0, usageDate: DAY() }); state.materials = []; state.enterpriseProfiles = keepEnterpriseProfiles; state.activeEnterpriseProfileId = keepActiveProfileId; } state.candidates = []; state.variants = []; state.publications = []; state.settings.masterEnabled = false; state.settings.collectionEnabled = false; state.settings.workflowAutoEnabled = false; addActivity('info', '已清空本地数据（总控与自动流程已关闭）', keepSettings ? '采集设置、项目资料库与专用浏览器登录资料均已保留' : '测试状态已恢复初始值'); saveStateWithGeneratedImageCleanup(generatedFiles); return { ok: true }; }
   const handler = actionRoutes.get(route);
   if (handler) return handler(body);
   return { ok: false, message: '未知操作' };
