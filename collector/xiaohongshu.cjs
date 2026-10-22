@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { ChromeSession, wait } = require('./chrome-session.cjs');
+const tempo = require('../lib/tempo.cjs');
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 
@@ -115,6 +116,56 @@ function cardPoolScript(limit = 100) {
       const image = card.querySelector('img'); const coverUrl = image?.currentSrc || image?.getAttribute('data-src') || image?.src || '';
       const isVideo = Boolean(card.querySelector('video,[class*="play-icon"],[class*="video-icon"],[class*="video-card"]'));
       if (title) results.push({ id, url: href, accessUrl, title, author, likeText, coverUrl, isVideo, rawText: text.slice(0, 12) });
+      if (results.length >= ${resultLimit}) break;
+    }
+    return results;
+  })()`;
+}
+
+// 搜索页的结构化数据在 window.__INITIAL_STATE__.search.feeds 里，比 DOM 稳：
+// 平台改版改的是布局，这份数据是渲染前的源。结构不认识或字段缺失时返回空数组，
+// 调用方退回 DOM 抓取，不会因为这里失败就采不到东西。
+function searchStateScript(limit = 100) {
+  const resultLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+  return `(() => {
+    const state = window.__INITIAL_STATE__;
+    const feeds = state && state.search && state.search.feeds;
+    if (!feeds) return [];
+    const list = feeds.value !== undefined ? feeds.value : feeds._value;
+    if (!Array.isArray(list)) return [];
+    const count = (value) => {
+      if (value === undefined || value === null) return 0;
+      if (typeof value === 'number') return value;
+      const text = String(value).trim();
+      const num = parseFloat(text);
+      if (!Number.isFinite(num)) return 0;
+      return Math.round(num * (text.includes('万') ? 10000 : 1));
+    };
+    const results = [];
+    for (const entry of list) {
+      if (!entry || typeof entry !== 'object') continue;
+      const card = entry.noteCard || entry.note_card || {};
+      const id = String(entry.id || card.noteId || card.note_id || '');
+      if (!id) continue;
+      const title = String(card.displayTitle || card.display_title || card.title || '').trim();
+      if (!title) continue;
+      const token = String(entry.xsecToken || entry.xsec_token || card.xsecToken || '');
+      const user = card.user || {};
+      const interact = card.interactInfo || card.interact_info || {};
+      const cover = card.cover || {};
+      const url = new URL('/explore/' + id, location.origin).href;
+      const accessUrl = token ? new URL('/explore/' + id + '?xsec_token=' + encodeURIComponent(token) + '&xsec_source=pc_search', location.origin).href : url;
+      const likes = count(interact.likedCount !== undefined ? interact.likedCount : interact.liked_count);
+      const isVideo = String(card.type || '').toLowerCase() === 'video' || Boolean(card.video);
+      results.push({
+        id, url, accessUrl, title,
+        author: String(user.nickname || user.nickName || user.name || '').trim(),
+        likeText: String(likes),
+        likes,
+        coverUrl: String(cover.urlDefault || cover.url_default || cover.urlPre || cover.url || ''),
+        isVideo,
+        rawText: [title]
+      });
       if (results.length >= ${resultLimit}) break;
     }
     return results;
@@ -698,18 +749,31 @@ class XiaohongshuCollector {
           fallbackUrl:home,
           recoveryCount:browserRecoveries,
           operation:async (activeClient) => {
-            const navigation = await this.navigateOnce(activeClient, searchUrl, Math.max(1000, delayMs));
+            const navigation = await this.navigateOnce(activeClient, searchUrl, tempo.actionDelay('afterNavigate', Math.max(1000, delayMs)));
             const cardPool = new Map();
             const collectVisibleCards = async () => {
               const cards = await activeClient.evaluate(cardPoolScript(Math.max(perKeywordRaw || 50, 100)));
               for (const item of cards || []) if (!cardPool.has(item.id)) cardPool.set(item.id, item);
             };
             await collectVisibleCards();
+            // 结构化数据只补 DOM 没抓到的卡片：DOM 选择器最容易随改版失效。
+            try {
+              const stateItems = await activeClient.evaluate(searchStateScript(Math.max(perKeywordRaw || 50, 100)));
+              for (const item of stateItems || []) if (item?.id && !cardPool.has(item.id)) cardPool.set(item.id, item);
+            } catch {}
             for (let round = 0; round < Math.max(0, Math.min(12, scrollRounds)); round += 1) {
               if (shouldStop?.()) return { stopped:true, navigation, cardPool, page:null };
               await activeClient.evaluate('window.scrollBy({top: Math.max(window.innerHeight * 0.9, 700), behavior: "instant"}); true');
-              await wait(Math.max(800, Math.floor(delayMs / 2)));
-              await collectVisibleCards();
+              // 等的是「新卡片出现」而不是固定时长：有增长立刻继续，没增长才等到原来的上限。
+              const waitBudget = Math.max(800, Math.floor(delayMs / 2));
+              const scrollDeadline = Date.now() + waitBudget;
+              while (Date.now() < scrollDeadline) {
+                if (shouldStop?.()) return { stopped:true, navigation, cardPool, page:null };
+                const sizeBefore = cardPool.size;
+                await wait(tempo.actionDelay('betweenScroll', Math.min(320, waitBudget)));
+                await collectVisibleCards();
+                if (cardPool.size > sizeBefore) break;
+              }
               if (cardPool.size >= perKeywordRaw) break;
             }
             const page = await activeClient.evaluate(extractionScript(perKeywordRaw));
@@ -755,7 +819,7 @@ class XiaohongshuCollector {
                 fallbackUrl:home,
                 recoveryCount:browserRecoveries,
                 operation:async (activeClient) => {
-                  const navigation = await this.navigateOnce(activeClient, item.accessUrl || item.url, Math.max(1200, Math.floor(delayMs / 2)));
+                  const navigation = await this.navigateOnce(activeClient, item.accessUrl || item.url, tempo.actionDelay('reading', Math.max(1200, Math.floor(delayMs / 2))));
                   const detail = await activeClient.evaluate(detailExtractionScript(item.id));
                   return { navigation, detail, accessFailure:await this.accessFailure(activeClient, detail) };
                 },
