@@ -87,19 +87,34 @@ async function main() {
     check(calls === 0, `闸门拒绝时不应发出请求，实际 ${calls}`);
   });
 
-  // 场景 5：成功时不保守计费
-  await scenario('一次成功', async () => {
-    let uncertain = 0;
-    let settled = 0;
-    await retryWithBudget({
+  // 场景 5：成功时执行器不得预先结票（否则业务方再记账会命中 alreadyHandled，费用被吞）
+  await scenario('一次成功不预先结票', async () => {
+    let closes = 0;
+    const outcome = await retryWithBudget({
       openAttempt: () => ({ ok: true, id: 'h1' }),
-      closeAttempt: (id, outcome) => { if (outcome === 'settled') settled += 1; else uncertain += 1; },
+      closeAttempt: () => { closes += 1; },
       action: async () => 'ok'
     });
-    check(settled === 1 && uncertain === 0, '一次成功应只结算一张票');
+    check(outcome.ok === true && outcome.holdId === 'h1', '成功应返回持有票据的 id');
+    check(closes === 0, `成功时不应由执行器结票，实际结票 ${closes} 次`);
   });
 
-  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 5, problems }, null, 2));
+  // 场景 6：失败仍按不确定口径结票（可能已扣费）
+  await scenario('失败按不确定结票', async () => {
+    let uncertain = 0;
+    try {
+      await retryWithBudget({
+        maxAttempts: 0,
+        openAttempt: () => ({ ok: true, id: 'h2' }),
+        closeAttempt: (id, kind) => { if (kind === 'uncertain') uncertain += 1; },
+        action: async () => { throw new Error('boom'); },
+        isTransient: () => false
+      });
+    } catch {}
+    check(uncertain === 1, '失败时应按 uncertain 结票一次');
+  });
+
+  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 6, problems }, null, 2));
   if (problems.length) process.exitCode = 1;
 }
 

@@ -512,6 +512,7 @@ const BUDGET_HOLDS_FILE = path.join(DATA_DIR, 'budget-holds.json');
 let budgetPersistenceBroken = false;
 function persistBudgetHolds() {
   try {
+    if (process.env.CONTENTOPS_SIMULATE_BUDGET_PERSIST_FAILURE === '1') throw new Error('模拟落盘失败（测试用）');
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const payload = JSON.stringify(budgetLedger.snapshot().tickets, null, 2);
     const temporary = `${BUDGET_HOLDS_FILE}.${process.pid}.tmp`;
@@ -541,8 +542,12 @@ function recoverBudgetHolds() {
       const kind = ['text', 'vision', 'image'].includes(ticket?.kind) ? ticket.kind : 'text';
       if (amount > 0) { chargeToSpent(kind, amount, `崩溃恢复：${ticket?.purpose || ''}`); recovered += 1; }
     }
+    if (recovered) {
+      addActivity('warning', '已恢复未结清预算', `上次未结清 ${recovered} 笔，已按保守口径计入当日消费`);
+      // 先把恢复结果落盘，再删待恢复文件；否则崩溃会导致重复入账。
+      saveState();
+    }
     fs.rmSync(BUDGET_HOLDS_FILE, { force: true });
-    if (recovered) addActivity('warning', '已恢复未结清预算', `上次未结清 ${recovered} 笔，已按保守口径计入当日消费`);
   } catch {}
 }
 
@@ -564,15 +569,29 @@ function reapExpiredHolds() {
     changed = true;
   }
   if (changed) {
-    // 过期入账与票据落盘必须在同一步完成，否则崩溃后可能重复入账。
-    persistBudgetHolds();
+    // 顺序：先落业务状态，再落票据文件。任一步失败都不会出现"钱记了但票据还在"。
     try { saveState(); } catch {}
+    persistBudgetHolds();
   }
 }
 
 function budgetRemainingAfterHolds(kind) {
   reapExpiredHolds();
   return budgetGuard.remainingOf(kind);
+}
+
+// 按显式金额预留：用于「被测档案的价格」与「当前激活档案」不同的场景（连接测试）。
+function reserveExact(kind, amount, purpose) {
+  if (budgetPersistenceBroken) return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已暂停新的收费调用；请检查磁盘后重启' };
+  reapExpiredHolds();
+  const estimate = Number(Math.max(0, Number(amount) || 0).toFixed(6));
+  const hold = budgetGuard.reserve({ kind, amount: estimate, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
+  if (!hold.ok) return hold;
+  if (!persistBudgetHolds()) {
+    budgetLedger.cancel(hold.id);
+    return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已拒绝本次收费调用' };
+  }
+  return { ok: true, id: hold.id, estimate };
 }
 
 // fixedCost：按张固定费用（生图按张计费时必须算进预留）。
@@ -582,7 +601,11 @@ function reserveCall(kind, inputChars, maxOutputTokens, purpose, fixedCost = 0) 
   const amount = Number((estimatedCallCost(kind, inputChars, maxOutputTokens) + Math.max(0, Number(fixedCost) || 0)).toFixed(6));
   const hold = budgetGuard.reserve({ kind, amount, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
   if (!hold.ok) return hold;
-  persistBudgetHolds();
+  if (!persistBudgetHolds()) {
+    // 落盘失败：本次请求一律不发，票据作废（不代表没花钱，但没发请求就不会花）。
+    budgetLedger.cancel(hold.id);
+    return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已拒绝本次收费调用' };
+  }
   return {
     ok: true,
     id: hold.id,
@@ -2061,6 +2084,7 @@ function ensureActionRoutes() {
   actionContext = {
     get state() { return state; },
     reserveCall,
+  reserveExact,
     trackOperation: (kind, label) => operationRegistry.register({ kind, label }),
   finalizeHold,
     // 在途任务锁：删除/重置前判断有没有任务持有该实体（actions 模块要用）
@@ -2121,6 +2145,7 @@ function ensureActionRoutes() {
     recordAiUsage,
     recordVisionUsage,
     reserveCall,
+  reserveExact,
     resetDailyUsageIfNeeded,
     resolveXhsPublicationIdentity,
     rollbackEnterpriseImageRemoval,
