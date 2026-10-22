@@ -184,7 +184,12 @@ async function main() {
     result.meta.stepCount = STEPS.length;
   } finally {
     child.kill();
-    await new Promise((resolve) => child.on('exit', resolve));
+    // 子进程可能在我们挂监听之前就已经退出（启动失败时就是这样）。
+    // 此时再等 'exit' 事件会永远等不到，事件循环排空后 node 静默退出 0 —— 测试就成了假通过。
+    await new Promise((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) return resolve();
+      child.once('exit', resolve);
+    });
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
   }
 

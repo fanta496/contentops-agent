@@ -65,6 +65,41 @@ async function main() {
   fs.copyFileSync(FIXTURE, path.join(DATA_DIR, 'state.json'));
 
   const v1 = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
+  // 关键：补一条候选 + 一条未发布草稿 + 一条没有 publicationNoteId 的发布记录。
+  // normalizeState 里变体只在 candidateId 命中候选时才保留，保留后必走 noteIdFromUrl()；
+  // 漏注入时这里会 ReferenceError，服务起不来（就是导致"重启即无法启动"的那条路径）。
+  v1.candidates = [{
+    id: 'candidate_fixture',
+    platform: '小红书',
+    sourceId: 'fixture_note_1',
+    title: '升级测试候选',
+    author: 'fixture',
+    url: 'https://www.xiaohongshu.com/explore/64f0c2a1000000001e01abcd',
+    status: 'new',
+    discoveredAt: v1.createdAt,
+    source: '真实浏览器采集'
+  }];
+  v1.variants = [{
+    id: 'variant_draft_fixture',
+    candidateId: 'candidate_fixture',
+    platform: '小红书',
+    status: 'draft',
+    title: '升级测试草稿',
+    body: '这条草稿用来触发未发布分支',
+    tags: [],
+    imagePages: [],
+    publicationUrl: '',
+    createdAt: v1.createdAt,
+    updatedAt: v1.createdAt,
+    source: 'AI生成'
+  }];
+  v1.publications = [{
+    variantId: 'variant_draft_fixture',
+    url: 'https://www.xiaohongshu.com/explore/64f0c2a1000000001e01abcd',
+    publicationUrl: 'https://www.xiaohongshu.com/explore/64f0c2a1000000001e01abcd',
+    publishedAt: v1.createdAt
+  }];
+  fs.writeFileSync(path.join(DATA_DIR, 'state.json'), JSON.stringify(v1, null, 2), 'utf8');
 
   const child = spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
     cwd: ROOT,
@@ -98,9 +133,22 @@ async function main() {
 
     // 3. 旧文件里的时间戳不应被清空
     if (!onDisk.createdAt || onDisk.createdAt !== v1.createdAt) problems.push('createdAt 被改动');
+
+    // 4. 草稿与发布记录要活下来，且发布记录从 URL 补出了 note id
+    if (!Array.isArray(onDisk.variants) || !onDisk.variants.some((item) => item.id === 'variant_draft_fixture')) {
+      problems.push('草稿版本在升级后丢失');
+    }
+    const publication = (onDisk.publications || []).find((item) => item.variantId === 'variant_draft_fixture');
+    if (!publication) problems.push('发布记录在升级后丢失');
+    else if (!publication.publicationNoteId) problems.push('发布记录没有从 URL 补出 note id');
   } finally {
     child.kill();
-    await new Promise((resolve) => child.on('exit', resolve));
+    // 子进程可能在我们挂监听之前就已经退出（启动失败时就是这样）。
+    // 此时再等 'exit' 事件会永远等不到，事件循环排空后 node 静默退出 0 —— 测试就成了假通过。
+    await new Promise((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) return resolve();
+      child.once('exit', resolve);
+    });
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
   }
 

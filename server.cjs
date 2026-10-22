@@ -74,6 +74,7 @@ const stateStore = require('./lib/state.cjs')({
   SELF_TEST, DAY, now, uid, safeText, promptText, finiteNumber,
   normalizeKeywords, normalizeTextList, normalizeClock, localClock, localDay,
   CREDENTIALS, VISION_CREDENTIALS, FEISHU_CREDENTIALS,
+  noteIdFromUrl,
   // 下面这些在 server.cjs 里声明得晚，只在调用时取值，避免 TDZ
   hasFeishuWebhook: (...args) => hasFeishuWebhook(...args),
   normalizeImageRules: (...args) => normalizeImageRules(...args),

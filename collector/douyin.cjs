@@ -416,7 +416,7 @@ class DouyinCollector {
     return waitInterruptibly(2600, shouldStop);
   }
 
-  async resolveClickTargets(client, searchUrl, targets, { delayMs = 1500, shouldStop, scrollTop = 0 } = {}) {
+  async resolveClickTargets(client, searchUrl, targets, { delayMs = 1500, shouldStop, scrollTop = 0, warnings = [] } = {}) {
     const results = []; let unresolved = 0; let attempted = 0; let resolved = 0;
     // 图文详情是全屏弹层、URL 不变，拿不到 /note/<id>。
     // 但点开时页面自己会请求 /aweme/v1/web/aweme/detail/，响应里有 aweme_id，
@@ -568,7 +568,7 @@ class DouyinCollector {
           const discovered=[...(page.results || [])];
           const freshTargets=(page.clickTargets || []).filter((target) => { const signature=`${target.coverKey || target.coverUrl}|${target.title}`; if (processedTargets.has(signature)) return false; processedTargets.add(signature); return true; });
           if (freshTargets.length) {
-            const clicked = await this.resolveClickTargets(client, keywordSearchUrl, freshTargets, { delayMs, shouldStop, scrollTop:page.scrollTop });
+            const clicked = await this.resolveClickTargets(client, keywordSearchUrl, freshTargets, { delayMs, shouldStop, scrollTop:page.scrollTop, warnings });
             if (clicked.stopped) return { ok:false, code:'MASTER_STOPPED', message:'人工总控已停止，抖音采集已中断' };
             discovered.push(...clicked.results);
             if (clicked.attempted && !clicked.resolved) return { ok:false, code:'PAGE_STRUCTURE_CHANGED', message:`抖音搜索页存在 ${clicked.attempted} 个疑似图文卡片，但点击后均无法取得作品标识；已停止本轮`, screenshot:await this.captureFailure(client, 'structure') };
