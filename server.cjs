@@ -448,21 +448,30 @@ function estimateCost(kind, usage = {}, connection = activeConnection(kind)) {
   return Number((input + output).toFixed(4));
 }
 function recordAiUsage(usage, purpose, holdId = '') {
-  if (holdId) finalizeHold(holdId, 'settled');
+  if (holdId) {
+    const closed = finalizeHold(holdId, 'settled');
+    if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
+  }
   const cost = estimateCost('text', usage);
   state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
 function recordVisionUsage(usage, purpose, holdId = '') {
-  if (holdId) finalizeHold(holdId, 'settled');
+  if (holdId) {
+    const closed = finalizeHold(holdId, 'settled');
+    if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
+  }
   const cost = estimateCost('vision', usage);
   state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `视觉输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
 function recordImageUsage(usage, purpose, holdId = '') {
-  if (holdId) finalizeHold(holdId, 'settled');
+  if (holdId) {
+    const closed = finalizeHold(holdId, 'settled');
+    if (closed?.alreadyHandled) { addActivity('info', '迟到的调用结果未重复计费', purpose); return 0; }
+  }
   const cost = Number((estimateCost('image', usage) + Number(state.settings.imageCostPerImage || 0)).toFixed(4));
   state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `计费 ¥${cost.toFixed(4)}`);
@@ -477,6 +486,7 @@ function estimatedCallCost(kind, inputChars, maxOutputTokens) {
 }
 // 预算：一次真实收费调用 = 一张票据 + 一次幂等结算（台账见 lib/budget.cjs）。
 const { createBudgetLedger, createSpendGuard } = require('./lib/budget.cjs');
+const { retryWithBudget } = require('./lib/retry.cjs');
 const budgetLedger = createBudgetLedger();
 const operationRegistry = require('./lib/operations.cjs').createOperationRegistry();
 const BUDGET_HOLD_TTL_MS = 5 * 60 * 1000;
@@ -499,11 +509,26 @@ function chargeToSpent(kind, amount, note = '') {
 
 // 票据落盘：进程崩了也要知道"可能有未结清的费用"
 const BUDGET_HOLDS_FILE = path.join(DATA_DIR, 'budget-holds.json');
+let budgetPersistenceBroken = false;
 function persistBudgetHolds() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(BUDGET_HOLDS_FILE, JSON.stringify(budgetLedger.snapshot().tickets, null, 2), 'utf8');
-  } catch {}
+    const payload = JSON.stringify(budgetLedger.snapshot().tickets, null, 2);
+    const temporary = `${BUDGET_HOLDS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, payload, 'utf8');
+    try {
+      const handle = fs.openSync(temporary, 'r');
+      try { fs.fsyncSync(handle); } catch {} finally { fs.closeSync(handle); }
+    } catch {}
+    fs.renameSync(temporary, BUDGET_HOLDS_FILE);
+    budgetPersistenceBroken = false;
+    return true;
+  } catch (error) {
+    // 落盘失败意味着崩溃后可能重复或漏记账，宁可停下收费也不能装作没事。
+    budgetPersistenceBroken = true;
+    addActivity('warning', '预算票据落盘失败', `已暂停新的收费调用：${error.message}`);
+    return false;
+  }
 }
 // 启动时把上次未结清的票据按保守口径入账（它们代表的请求可能已经发出并计费）
 function recoverBudgetHolds() {
@@ -532,9 +557,16 @@ function finalizeHold(holdId, outcome = 'settled') {
 }
 
 function reapExpiredHolds() {
+  let changed = false;
   for (const expired of budgetLedger.sweepExpired()) {
     chargeToSpent(expired.kind, expired.amount, `超时未结清：${expired.purpose || ''}`);
     addActivity('warning', '预算预留超时', `${expired.purpose || '未知调用'} 未按时结清，已按保守口径计入 ¥${expired.amount.toFixed(4)}`);
+    changed = true;
+  }
+  if (changed) {
+    // 过期入账与票据落盘必须在同一步完成，否则崩溃后可能重复入账。
+    persistBudgetHolds();
+    try { saveState(); } catch {}
   }
 }
 
@@ -545,6 +577,7 @@ function budgetRemainingAfterHolds(kind) {
 
 // fixedCost：按张固定费用（生图按张计费时必须算进预留）。
 function reserveCall(kind, inputChars, maxOutputTokens, purpose, fixedCost = 0) {
+  if (budgetPersistenceBroken) return { ok: false, code: 'BUDGET_LEDGER_UNAVAILABLE', message: '预算票据无法落盘，已暂停新的收费调用；请检查磁盘后重启' };
   reapExpiredHolds();
   const amount = Number((estimatedCallCost(kind, inputChars, maxOutputTokens) + Math.max(0, Number(fixedCost) || 0)).toFixed(6));
   const hold = budgetGuard.reserve({ kind, amount, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
@@ -1113,32 +1146,25 @@ function isTransientApiError(error) {
   return /timeout|timed out|abort|fetch failed|ECONN|ENET|socket|network|HTTP (408|409|425|429|500|502|503|504)|资源不足|upstream/i.test(message);
 }
 function retryAt(attempt) { return new Date(Date.now() + Math.min(60000, 1500 * (2 ** Math.max(0, attempt - 1)))).toISOString(); }
-async function withApiRetry(candidate, stage, action, { budgetKind = '', budgetEstimate = 0, budgetPurpose = '' } = {}) {
-  const maximum = finiteNumber(state.settings.analysisAutoRetryCount, 2, 0, 3);
-  let attempt = 0;
-  while (true) {
-    try { return await action(); }
-    catch (error) {
-      attempt += 1;
+async function withApiRetry(candidate, stage, action, budget) {
+  // 每次付费尝试都必须独立开票；缺预算上下文就直接报错，不允许"静默免费重试"。
+  if (!budget || !budget.kind) throw new Error('withApiRetry 必须传入预算上下文（kind/inputChars/maxOutputTokens）');
+  const outcome = await retryWithBudget({
+    maxAttempts: finiteNumber(state.settings.analysisAutoRetryCount, 2, 0, 3),
+    openAttempt: () => reserveCall(budget.kind, budget.inputChars, budget.maxOutputTokens, budget.purpose),
+    closeAttempt: (id, kind) => finalizeHold(id, kind),
+    action: () => action(),
+    isTransient: isTransientApiError,
+    beforeRetry: () => budgetRemainingAfterHolds(budget.kind) >= estimatedCallCost(budget.kind, budget.inputChars, budget.maxOutputTokens),
+    onFailure: (attempt, error, { willRetry }) => {
       candidate.analysisTask ||= {};
-      candidate.analysisTask[stage] = { status: attempt <= maximum && isTransientApiError(error) ? 'retrying' : 'failed', attempts:attempt, lastError:safeText(error.message, 800), nextRetryAt:attempt <= maximum && isTransientApiError(error) ? retryAt(attempt) : '', updatedAt:now() };
+      candidate.analysisTask[stage] = { status: willRetry ? 'retrying' : 'failed', attempts: attempt, lastError: safeText(error.message, 500) };
       saveState();
-      // 失败的那次请求可能已经计费：按估算保守入账，不当作免费。
-      if (budgetKind && budgetEstimate > 0) chargeToSpent(budgetKind, budgetEstimate, `${budgetPurpose || stage} 第${attempt}次尝试失败`);
-      if (attempt > maximum || !isTransientApiError(error)) throw error;
-      // 重试前重新检查额度：不够就立刻停，不再发出新请求。
-      if (budgetKind) {
-        const remaining = budgetRemainingAfterHolds(budgetKind);
-        const nextEstimate = Number(budgetEstimate) || 0;
-        if (nextEstimate > remaining) {
-          addActivity('warning', `${stage}重试被预算拦下`, `剩余 ¥${remaining.toFixed(4)}，下一次尝试预计 ¥${nextEstimate.toFixed(4)}`);
-          throw error;
-        }
-      }
-      addActivity('warning', `${stage}临时失败，自动重试`, `${candidate.title} · 第${attempt}/${maximum}次：${error.message}`);
-      await sleep(Math.min(60000, 1500 * (2 ** (attempt - 1))));
-    }
-  }
+    },
+    sleep: (attempt) => sleep(Math.min(60000, 1500 * (2 ** (attempt - 1))))
+  });
+  if (!outcome.ok) throw new Error(outcome.message);
+  return { result: outcome.value, holdId: outcome.holdId };
 }
 
 async function analyzeCandidate(candidate) {
@@ -1163,15 +1189,16 @@ async function analyzeCandidateInner(candidate) {
   const images = (candidate.imageUrls || []).slice(0, finiteNumber(state.settings.visionMaxImages, 12, 1, 20));
   const textWork = async () => {
     if (candidate.textAnalysis && candidate.textFingerprint === crypto.createHash('sha256').update(`${activeModelFingerprint('text')}|${textPrompt}`).digest('hex')) return { cost:0, cached:true };
-    const reservation = reserveCall('text', textPrompt.length + SYSTEM.length, 2500, '候选文本初析'); if (!reservation.ok) throw new Error(reservation.message);
-    const result = await withApiRetry(candidate, 'text', () => callJson({ ...activeConnection('text'), system:SYSTEM, prompt:textPrompt, maxOutputTokens:Math.min(outputTokenLimit('text', 2500), 2500), timeoutMs:activeConnection('text').requestTimeoutMs }));
-    if (masterStopped(generation)) return stopResult(); candidate.textAnalysis = result.data; candidate.textFingerprint = crypto.createHash('sha256').update(`${activeModelFingerprint('text')}|${textPrompt}`).digest('hex'); candidate.textAnalyzedAt = now(); candidate.analysisTask.text = { status:'completed', attempts:Number(candidate.analysisTask.text?.attempts || 0), updatedAt:now() }; return { cost:recordAiUsage(result.usage, '候选文本初析', reservation.id) };
+    const textCall = await withApiRetry(candidate, 'text', () => callJson({ ...activeConnection('text'), system:SYSTEM, prompt:textPrompt, maxOutputTokens:Math.min(outputTokenLimit('text', 2500), 2500), timeoutMs:activeConnection('text').requestTimeoutMs }), { kind: 'text', inputChars: textPrompt.length + SYSTEM.length, maxOutputTokens: 2500, purpose: '候选文本初析' });
+    const result = textCall.result;
+    if (masterStopped(generation)) return stopResult(); candidate.textAnalysis = result.data; candidate.textFingerprint = crypto.createHash('sha256').update(`${activeModelFingerprint('text')}|${textPrompt}`).digest('hex'); candidate.textAnalyzedAt = now(); candidate.analysisTask.text = { status:'completed', attempts:Number(candidate.analysisTask.text?.attempts || 0), updatedAt:now() }; return { cost:recordAiUsage(result.usage, '候选文本初析', textCall.holdId) };
   };
   const visionWork = async () => {
     if (candidate.visionAnalysis && candidate.visionFingerprint === fingerprint) return { cost:0, cached:true };
-    const visionPrompt = candidateVisionPrompt(candidate, images.length); const reservation = reserveCall('vision', visionPrompt.length + images.length * 2000, 3500, '候选视觉拆解'); if (!reservation.ok) throw new Error(reservation.message);
-    const result = await withApiRetry(candidate, 'vision', () => callVisionJson({ ...activeConnection('vision'), prompt:visionPrompt, imageUrls:images, maxOutputTokens:Math.min(outputTokenLimit('vision', 3500), 3500), timeoutMs:activeConnection('vision').requestTimeoutMs }));
-    if (masterStopped(generation)) return stopResult(); candidate.visionAnalysis = normalizeVisionAnalysis(result.data); candidate.visionFingerprint = fingerprint; candidate.visionAnalyzedAt = now(); candidate.visionImageCount = result.imageCount; candidate.analysisTask.vision = { status:'completed', attempts:Number(candidate.analysisTask.vision?.attempts || 0), updatedAt:now() }; return { cost:recordVisionUsage(result.usage, '候选视觉拆解', reservation.id) };
+    const visionPrompt = candidateVisionPrompt(candidate, images.length);
+    const visionCall = await withApiRetry(candidate, 'vision', () => callVisionJson({ ...activeConnection('vision'), prompt:visionPrompt, imageUrls:images, maxOutputTokens:Math.min(outputTokenLimit('vision', 3500), 3500), timeoutMs:activeConnection('vision').requestTimeoutMs }), { kind: 'vision', inputChars: visionPrompt.length + images.length * 2000, maxOutputTokens: 3500, purpose: '候选视觉拆解' });
+    const result = visionCall.result;
+    if (masterStopped(generation)) return stopResult(); candidate.visionAnalysis = normalizeVisionAnalysis(result.data); candidate.visionFingerprint = fingerprint; candidate.visionAnalyzedAt = now(); candidate.visionImageCount = result.imageCount; candidate.analysisTask.vision = { status:'completed', attempts:Number(candidate.analysisTask.vision?.attempts || 0), updatedAt:now() }; return { cost:recordVisionUsage(result.usage, '候选视觉拆解', visionCall.holdId) };
   };
   const [textDone, visionDone] = await Promise.all([textWork(), visionWork()]);
   if (textDone?.code === 'MASTER_STOPPED' || visionDone?.code === 'MASTER_STOPPED') return stopResult();
@@ -1513,26 +1540,26 @@ async function generateWithAiInner(candidate, count = state.settings.generationC
   const imageRules = normalizeImageRules(state.settings);
   setAgent('creator', { status: 'running', detail: `正在策划 ${count} 套原创图文与生图提示词` });
   const prompt = generationPrompt(candidate, count, context, { ...productionEnterprise, imageAssets:usableAssets.map(enterpriseAssetSummary) }, imageRules);
-  const maxOutputTokens = outputTokenLimit('text', 12000); const reservation = reserveCall('text', prompt.length + SYSTEM.length, maxOutputTokens, '图文策划'); if (!reservation.ok) return reservation;
-  const maximum = finiteNumber(state.settings.creationAutoRetryCount, 2, 0, 3);
-  let attempt = 0; let result;
-  while (true) {
-    try {
-      result = await callJson({ ...activeConnection('text'), system: `${SYSTEM}\n你还负责原创图文生产，必须避免复制来源内容和虚构案例。`, prompt, temperature: 0.75, timeoutMs: activeConnection('text').requestTimeoutMs, maxOutputTokens });
-      break;
-    } catch (error) {
-      attempt += 1;
-      const retrying = attempt <= maximum && isTransientApiError(error);
+  const maxOutputTokens = outputTokenLimit('text', 12000);
+  const creationAttempt = await retryWithBudget({
+    maxAttempts: finiteNumber(state.settings.creationAutoRetryCount, 2, 0, 3),
+    openAttempt: () => reserveCall('text', prompt.length + SYSTEM.length, maxOutputTokens, '图文策划'),
+    closeAttempt: (id, outcome) => finalizeHold(id, outcome),
+    action: () => callJson({ ...activeConnection('text'), system: `${SYSTEM}\n你还负责原创图文生产，必须避免复制来源内容和虚构案例。`, prompt, temperature: 0.75, timeoutMs: activeConnection('text').requestTimeoutMs, maxOutputTokens }),
+    isTransient: isTransientApiError,
+    beforeRetry: () => budgetRemainingAfterHolds('text') >= estimatedCallCost('text', prompt.length + SYSTEM.length, maxOutputTokens),
+    onFailure: (attempt, error, { willRetry }) => {
       candidate.creationTask ||= {};
-      Object.assign(candidate.creationTask, { status:retrying ? 'retrying' : 'retryable_failed', attempts:attempt, lastError:safeText(error.message, 800), nextRetryAt:retrying ? retryAt(attempt) : '', updatedAt:now() });
-      setAgent('creator', { status:retrying ? 'running' : 'warning', detail:retrying ? `一做暂时失败，正在第${attempt}/${maximum}次自动重试` : `一做待重试：${safeText(error.message, 180)}` });
+      Object.assign(candidate.creationTask, { status: willRetry ? 'retrying' : 'retryable_failed', attempts: attempt, lastError: safeText(error.message, 500), nextRetryAt: willRetry ? retryAt(attempt) : '' });
+      setAgent('creator', { status: willRetry ? 'running' : 'warning', detail: willRetry ? `一做暂时失败，正在第${attempt}次自动重试` : `一做待重试：${safeText(error.message, 120)}` });
       saveState();
-      if (!retrying) throw error;
-      addActivity('warning', '一做策划临时失败，自动重试', `${candidate.title} · 第${attempt}/${maximum}次：${error.message}`);
-      await sleep(Math.min(60000, 1500 * (2 ** (attempt - 1))));
-      if (requireMaster && masterStopped(generation)) return stopResult();
-    }
-  }
+      if (willRetry) addActivity('warning', '一做策划临时失败，自动重试', `${candidate.title} · 第${attempt}次：${error.message}`);
+    },
+    sleep: (attempt) => sleep(Math.min(60000, 1500 * (2 ** (attempt - 1))))
+  });
+  if (!creationAttempt.ok) return { ok: false, code: creationAttempt.code, message: creationAttempt.message };
+  const result = creationAttempt.value;
+  if (requireMaster && masterStopped(generation)) return stopResult();
   if (requireMaster && masterStopped(generation)) return stopResult(); const rawVariants = Array.isArray(result.data?.variants) ? result.data.variants : []; const variants = normalizeGeneratedVariants(candidate, rawVariants, count);
   if (variants.length !== count) {
     const diagnostics = rawVariants.slice(0, count).map((item, index) => { const pages = Array.isArray(item?.imagePages) ? item.imagePages : []; const grounding = item?.enterpriseGrounding || {}; const reasons = []; if (!safeText(item?.title, 180)) reasons.push('缺标题'); if (!safeText(item?.body, 8000)) reasons.push('缺正文'); if (containsInternalProductionLanguage(`${item?.title || ''}\n${item?.body || ''}`)) reasons.push('正文含生产术语'); if (!safeText(grounding.productAngle, 500)) reasons.push('缺项目表达角度'); if (!normalizeTextList(grounding.factsUsed, 8, 500).some(meaningfulEnterpriseLine)) reasons.push('缺项目事实依据'); if (pages.length !== imageRules.imageCount) reasons.push(`图片页${pages.length}/${imageRules.imageCount}`); if (pages.some((page) => !meaningfulEnterpriseLine(page?.copy))) reasons.push('存在空白上图文案'); if (pages.some((page) => !promptText(page?.imagePrompt, 6000).trim())) reasons.push('存在空白生图提示词'); return `第${index + 1}套：${reasons.join('、') || '字段归一化失败'}`; });
@@ -1540,7 +1567,7 @@ async function generateWithAiInner(candidate, count = state.settings.generationC
   }
   const assetIds = new Set(usableAssets.map((asset) => asset.id));
   if (variants.some((variant) => (variant.enterpriseGrounding?.assetIds || []).some((id) => !assetIds.has(id)))) throw new Error('模型返回了不存在的参考图片编号，结果未写入；请重试一做');
-  const cost = recordAiUsage(result.usage, '图文策划', reservation.id); state.settings.generationsToday += variants.length;
+  const cost = recordAiUsage(result.usage, '图文策划', creationAttempt.holdId); state.settings.generationsToday += variants.length;
   candidate.creationTask ||= {}; Object.assign(candidate.creationTask, { status:'completed', attempts:attempt + 1, lastError:'', nextRetryAt:'', completedAt:now(), updatedAt:now() });
   setAgent('creator', { status: 'idle', detail: `最近完成 ${variants.length} 套策划稿，等待人工编辑和生图` }); return { ok: true, variants, cost };
 }

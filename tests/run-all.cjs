@@ -65,6 +65,8 @@ run('ctx 契约 tests/ctx-contract.cjs', process.execPath, [path.join(ROOT, 'tes
 run('容器引用 tests/container-refs.cjs', process.execPath, [path.join(ROOT, 'tests', 'container-refs.cjs')]);
 run('启动退出码 tests/startup-exit.cjs', process.execPath, [path.join(ROOT, 'tests', 'startup-exit.cjs')]);
 run('在途操作 tests/operations.cjs', process.execPath, [path.join(ROOT, 'tests', 'operations.cjs')]);
+run('重试接线 tests/retry-wiring.cjs', process.execPath, [path.join(ROOT, 'tests', 'retry-wiring.cjs')]);
+run('重试计费 tests/retry-budget.cjs', process.execPath, [path.join(ROOT, 'tests', 'retry-budget.cjs')]);
 run('预算台账 tests/budget.cjs', process.execPath, [path.join(ROOT, 'tests', 'budget.cjs')]);
 run('离线自检 server.cjs --self-test', process.execPath, [path.join(ROOT, 'server.cjs'), '--self-test'], {
   env: { CONTENTOPS_CARD_RENDERER: path.join(ROOT, 'launcher', 'bin', 'CardRenderer.exe') }
