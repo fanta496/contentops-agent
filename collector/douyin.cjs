@@ -274,31 +274,62 @@ class DouyinCollector {
 
   // 登录状态探测：只打开搜索页读一眼，不抓内容。
   // 抖音的验证可能藏在 iframe 里（不点也会预加载），所以这里和 collect() 用同一套判断。
+  // 登录状态探测：打开搜索页，等结果真的渲染出来再判断。
+  // 抖音是 SPA，导航 complete 之后结果区还要几秒；看一眼就下结论会把"还在加载"误报成"页面异常"。
   async probe(keyword = '内容运营') {
     const target = this.searchUrl(keyword || '内容运营');
     const { client } = await this.session.openClient('https://www.douyin.com/', 'douyin.com');
     try {
-      if (!await this.navigateWithStop(client, target, 1200)) return { ok:false, code:'PROBE_ABORTED', message:'抖音搜索页未能在限定时间内就绪' };
-      const state = await client.evaluate(`(() => {
+      if (!await this.navigateWithStop(client, target, 900)) return { ok:false, code:'PROBE_ABORTED', message:'抖音搜索页未能在限定时间内就绪' };
+      const script = `(() => {
         const visible = (node) => { try { const box = node.getBoundingClientRect(); const style = getComputedStyle(node); return box.width > 8 && box.height > 8 && style.visibility !== 'hidden' && style.display !== 'none'; } catch { return false; } };
-        const challengeFrame = [...document.querySelectorAll('iframe')].some((frame) => {
-          if (!/(?:verifycenter|nocaptcha|captcha|verify)/i.test(frame.src || '')) return false;
-          return visible(frame);
-        });
-        const bodyText = (document.body && document.body.innerText || '').slice(0, 8000);
-        const loginSignals = ['登录后查看', '扫码登录', '手机号登录', '登录抖音', '请先登录'];
+        const challengeFrame = [...document.querySelectorAll('iframe')].some((frame) => /(?:verifycenter|nocaptcha|captcha|verify)/i.test(frame.src || '') && visible(frame));
         const loginForm = [...document.querySelectorAll('[class*="login"],[class*="Login"],[data-e2e*="login"],[role="dialog"]')].some(visible);
-        const works = [...document.querySelectorAll('a[href*="/note/"],a[href*="/video/"]')].filter(visible).length;
-        return { url: location.href, title: document.title, challengeFrame, loginForm, works, loginText: loginSignals.some((text) => bodyText.includes(text)), bodyExcerpt: bodyText.slice(0, 500) };
-      })()`);
+        // 抖音搜索结果是虚拟列表，卡片不一定带 /note/ 链接，所以多条选择器一起数。
+        const cards = [
+          ...document.querySelectorAll('a[href*="/note/"],a[href*="/video/"]'),
+          ...document.querySelectorAll('[data-e2e*="feed"] img, li img[src*="douyinpic"], img[src*="douyinpic"]')
+        ].filter(visible);
+        const seen = new Set();
+        let works = 0;
+        for (const node of cards) {
+          const anchor = node.closest('a[href*="/note/"],a[href*="/video/"]');
+          const key = anchor ? (anchor.getAttribute('href') || '') : (node.getAttribute('src') || '');
+          if (!key || seen.has(key)) continue;
+          seen.add(key); works += 1;
+        }
+        const bodyText = (document.body && document.body.innerText || '').slice(0, 8000);
+        return {
+          url: location.href,
+          title: document.title,
+          challengeFrame,
+          loginForm,
+          works,
+          unresolved: /加载中|正在加载|Loading/i.test(bodyText.slice(0, 400))
+        };
+      })()`;
+      const deadline = Date.now() + 20000;
+      let state = null;
+      while (Date.now() < deadline) {
+        state = await client.evaluate(script);
+        if (state?.challengeFrame) break;
+        if (Number(state?.works) > 0) break;
+        if (state?.loginForm) break;
+        await waitInterruptibly(600);
+      }
       if (state?.challengeFrame) {
         return { ok:false, code:'CAPTCHA', message:'抖音要求安全验证，请人工处理后再检查', screenshot:await this.captureFailure(client, 'captcha') };
       }
-      if (Number(state?.works) === 0 && (state?.loginForm || state?.loginText)) {
+      if (Number(state?.works) === 0 && state?.loginForm) {
         return { ok:false, code:'LOGIN_REQUIRED', message:'抖音登录状态不可用，请在专用浏览器里扫码登录', screenshot:await this.captureFailure(client, 'login') };
       }
       if (Number(state?.works) === 0) {
-        return { ok:false, code:'PAGE_UNRECOGNIZED', message:'抖音搜索页没有识别到作品入口，可能是页面结构变化或网络问题', screenshot:await this.captureFailure(client, 'unrecognized') };
+        return {
+          ok:false,
+          code:'PAGE_UNRECOGNIZED',
+          message: state?.unresolved ? '抖音搜索结果 20 秒内没有加载出来，可能是网络慢或页面卡住' : '抖音搜索页没有识别到作品入口，可能是页面结构变化',
+          screenshot:await this.captureFailure(client, 'unrecognized')
+        };
       }
       return { ok:true, code:'PAGE_REACHABLE', message:`页面可访问，识别到 ${Number(state.works)} 个作品入口；正式采集时会继续校验` };
     } finally {
@@ -457,7 +488,19 @@ class DouyinCollector {
           if (scroll.stopped) return { ok:false, code:'MASTER_STOPPED', message:'人工总控已停止，抖音采集已中断' };
           if (!scroll.moved || (scroll.atEnd && noProgressPasses >= 1) || noProgressPasses >= 4) break;
         }
-        const raw=[]; const remainingRaw=Math.max(0, rawTarget-stats.raw);
+        if (!keywordResults.length) {
+      // 一条都没拿到：把页面状态记下来（标题/URL/可见卡片数），并留一张截图。
+      // 抖音在连续快速搜索后可能返回空结果页，靠这条能区分"没图文"和"被软限制"。
+      const state = await client.evaluate(`(() => ({ title: document.title, url: location.href, ready: document.readyState, cards: document.querySelectorAll('[data-e2e*="feed"], li').length, text: (document.body && document.body.innerText || '').slice(0, 200) }))()`).catch(() => ({}));
+      const screenshot = await this.captureFailure(client, 'no-cards').catch(() => '');
+      warnings.push({
+        code: 'NO_RESULT_CARDS',
+        keyword,
+        message: `关键词「${keyword}」没有拿到任何卡片（页面：${String(state.title || '').slice(0, 40)}；可见容器：${Number(state.cards) || 0}）`
+      });
+      if (screenshot) warnings[warnings.length - 1].screenshot = screenshot;
+    }
+    const raw=[]; const remainingRaw=Math.max(0, rawTarget-stats.raw);
         for (const card of keywordResults) { if (seen.has(card.id)) { stats.duplicates += 1; continue; } if (raw.length >= remainingRaw) break; seen.add(card.id); raw.push(card); }
         stats.raw += raw.length;
         const remainingDetail=Math.max(0, detailTarget-stats.prefiltered);
