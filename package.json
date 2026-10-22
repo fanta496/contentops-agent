@@ -1,6 +1,6 @@
 {
   "name": "contentops-agent",
-  "version": "2.0.0",
+  "version": "2.0.0-beta.1",
   "private": true,
   "description": "本地图文内容增长工作流：采集、分析、生产、审核、发布后观察",
   "license": "MIT",

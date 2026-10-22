@@ -41,6 +41,18 @@ function startMockProvider() {
   });
 }
 
+function startHangingProvider() {
+  const state = { requests: 0 };
+  const server = http.createServer((req, res) => {
+    state.requests += 1;
+    req.on('data', () => {});
+    // 故意不结束响应：让票据停在"在途"，以便触发超时回收
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({ server, state, port: server.address().port }));
+  });
+}
+
 function request(port, method, urlPath, body) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
@@ -337,7 +349,81 @@ async function main() {
     fs.rmSync(dataG, { recursive: true, force: true });
   }
 
-  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 7, problems }, null, 2));
+  // ---------- 场景 H：在途票据超时回收时真实写盘失败 → 必须熔断 ----------
+  {
+    const providerH = await startHangingProvider();
+    const dataH = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `billing-h-${process.pid}`);
+    fs.rmSync(dataH, { recursive: true, force: true });
+    fs.mkdirSync(dataH, { recursive: true });
+    const portH = 19600 + (process.pid % 80);
+    const child = startServer(dataH, portH, {
+      CONTENTOPS_BUDGET_HOLD_TTL_MS: '400',
+      CONTENTOPS_SIMULATE_WRITE_EIO_AFTER_MS: '700'
+    });
+    try {
+      await waitForHealth(portH, Date.now() + 30000);
+      const saved = await request(portH, 'POST', '/api/model-profile/save', {
+        kind: 'text', name: '挂起档案', apiKey: 'sk-mock-key', baseUrl: `http://127.0.0.1:${providerH.port}`, model: 'mock-model',
+        inputPricePerMillion: 500, outputPricePerMillion: 500, maxOutputTokens: 100, requestTimeoutSeconds: 2
+      });
+      const profileId = saved.body?.profile?.id;
+      await request(portH, 'POST', '/api/settings/save', {
+        xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['壁纸'], dailyBudget: 1
+      });
+      // 第一笔会一直挂着（供应商不响应），票据停在在途
+      const pendingFirst = request(portH, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId }).catch(() => null);
+      await new Promise((resolve) => setTimeout(resolve, 1200)); // 超过 TTL 且超过注入时间点
+      const second = await request(portH, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId });
+      const bodyText = JSON.stringify(second.body || {});
+      if (second.body?.ok === true) problems.push('超时回收写盘失败后仍放行了收费请求');
+      if (!/BUDGET_LEDGER_(FAULT|UNAVAILABLE)|熔断|暂停/.test(bodyText)) problems.push(`超时回收写盘失败后没有明确拒绝：${bodyText.slice(0, 160)}`);
+      if (providerH.state.requests > 1) problems.push(`熔断后不应再请求供应商，实际 ${providerH.state.requests} 次`);
+      await pendingFirst;
+    } finally {
+      await stop(child);
+      providerH.server.close();
+      fs.rmSync(dataH, { recursive: true, force: true });
+    }
+  }
+
+  // ---------- 场景 I：启动补账时真实写盘失败 → 服务不得放开收费 ----------
+  {
+    const providerI = await startMockProvider();
+    const dataI = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `billing-i-${process.pid}`);
+    fs.rmSync(dataI, { recursive: true, force: true });
+    fs.mkdirSync(dataI, { recursive: true });
+    fs.writeFileSync(path.join(dataI, 'state.json'), JSON.stringify({
+      version: 2,
+      mode: 'workflow-agent',
+      settings: {
+        budgetJournal: [
+          { id: 'hold_prev_held', kind: 'text', amount: 0.7, purpose: '上次未结清', status: 'held', createdAt: new Date().toISOString() }
+        ]
+      }
+    }), 'utf8');
+    const portI = 19700 + (process.pid % 80);
+    // 第 1 次写盘是启动时的 schema 提交；第 2 次是恢复补账 → 让它失败
+    const child = startServer(dataI, portI, { CONTENTOPS_SIMULATE_WRITE_EIO_AT: '2' });
+    try {
+      await waitForHealth(portI, Date.now() + 30000);
+      const saved = await request(portI, 'POST', '/api/model-profile/save', {
+        kind: 'text', name: '恢复失败档案', apiKey: 'sk-mock-key', baseUrl: `http://127.0.0.1:${providerI.port}`, model: 'mock-model',
+        inputPricePerMillion: 500, outputPricePerMillion: 500, maxOutputTokens: 100, requestTimeoutSeconds: 3
+      });
+      const profileId = saved.body?.profile?.id;
+      const tested = await request(portI, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId });
+      const bodyText = JSON.stringify(tested.body || {});
+      if (tested.body?.ok === true) problems.push('启动补账写盘失败后仍放行了收费请求');
+      if (!/BUDGET_LEDGER_FAULT|熔断|暂停/.test(bodyText)) problems.push(`启动恢复失败后没有熔断：${bodyText.slice(0, 140)}`);
+      if (providerI.state.requests !== 0) problems.push(`启动恢复失败后不应请求供应商，实际 ${providerI.state.requests} 次`);
+    } finally {
+      await stop(child);
+      providerI.server.close();
+      fs.rmSync(dataI, { recursive: true, force: true });
+    }
+  }
+
+  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 9, problems }, null, 2));
   if (problems.length) process.exitCode = 1;
 }
 
