@@ -59,28 +59,50 @@ async function publicImageUrl(value) {
   if (!url.hostname || url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || url.hostname.endsWith('.local')) throw new Error('生图供应商返回的图片 URL 指向本机或内网，已拒绝下载');
   const addresses = isIP(url.hostname) ? [{ address:url.hostname }] : await lookup(url.hostname, { all:true, verbatim:true }).catch(() => { throw new Error('生图供应商返回的图片 URL 无法解析'); });
   if (!addresses.length || addresses.some((item) => isPrivateAddress(item.address))) throw new Error('生图供应商返回的图片 URL 指向本机或内网，已拒绝下载');
-  return url;
+  // 把解析结果一并回传：下载时要把它绑定到连接上，避免二次解析被换成内网地址。
+  return { url, addresses: addresses.map((item) => ({ address: item.address, family: item.family || 4 })) };
 }
 
 async function downloadImageUrl(value, timeoutMs) {
-  const url = await publicImageUrl(value);
-  // 不跟随重定向：供应商返回 30x 时直接失败。否则可以把 https 外链 302 到内网地址，
-  // publicImageUrl 里的 DNS/IP 校验只对第一跳有效。
-  const response = await fetch(url, { signal:AbortSignal.timeout(timeoutMs), redirect:'error' });
-  if (!response.ok) throw new Error(`生图供应商返回的图片 URL 无法下载：HTTP ${response.status}`);
-  const declaredLength = Number(response.headers.get('content-length') || 0);
-  if (declaredLength > 25 * 1024 * 1024) throw new Error('生图供应商返回图片超过 25MB 安全上限');
-  if (!response.body) throw new Error('生图供应商返回图片为空');
-  const chunks = []; let total = 0;
-  for await (const chunk of response.body) {
-    const bytes = Buffer.from(chunk); total += bytes.length;
-    if (total > 25 * 1024 * 1024) throw new Error('生图供应商返回图片超过 25MB 安全上限');
-    chunks.push(bytes);
-  }
-  const bytes = Buffer.concat(chunks, total);
-  const mime = detectImageMime(bytes);
-  if (!mime) throw new Error('生图供应商返回的 URL 内容不是有效的 PNG、JPG 或 WebP 图片');
-  return { bytes, mime };
+  const { url, addresses } = await publicImageUrl(value);
+  const pinned = addresses[0];
+  // 关键：把已校验的 IP 通过 lookup 绑定到这次连接，发送 SNI 用原主机名。
+  // 这样即使 DNS 在"校验"和"连接"之间被重解析到内网，也连不到内网；redirect 也不会被自动跟随。
+  return await new Promise((resolve, reject) => {
+    const request = https.request({
+      protocol: 'https:',
+      hostname: url.hostname,
+      port: url.port || 443,
+      path: `${url.pathname}${url.search}`,
+      method: 'GET',
+      servername: url.hostname,
+      timeout: Math.max(1000, Number(timeoutMs) || 30000),
+      headers: { host: url.hostname, 'accept': 'image/*' },
+      lookup: (hostname, options, callback) => callback(null, pinned.address, pinned.family === 6 ? 6 : 4)
+    }, (response) => {
+      const status = Number(response.statusCode) || 0;
+      if (status >= 300 && status < 400) { response.resume(); reject(new Error('生图供应商返回了重定向，已拒绝跟随')); return; }
+      if (status !== 200) { response.resume(); reject(new Error(`生图供应商返回的图片 URL 无法下载：HTTP ${status}`)); return; }
+      const declaredLength = Number(response.headers['content-length'] || 0);
+      if (declaredLength > 25 * 1024 * 1024) { response.resume(); reject(new Error('生图供应商返回图片超过 25MB 安全上限')); return; }
+      const chunks = []; let total = 0;
+      response.on('data', (chunk) => {
+        total += chunk.length;
+        if (total > 25 * 1024 * 1024) { request.destroy(new Error('生图供应商返回图片超过 25MB 安全上限')); return; }
+        chunks.push(Buffer.from(chunk));
+      });
+      response.on('end', () => {
+        const bytes = Buffer.concat(chunks, total);
+        const mime = detectImageMime(bytes);
+        if (!mime) { reject(new Error('生图供应商返回的 URL 内容不是有效的 PNG、JPG 或 WebP 图片')); return; }
+        resolve({ bytes, mime });
+      });
+      response.on('error', reject);
+    });
+    request.on('timeout', () => request.destroy(new Error('生图供应商图片下载超时')));
+    request.on('error', reject);
+    request.end();
+  });
 }
 
 async function generateImage({ baseUrl, apiKey, model, prompt, size = '', timeoutMs = 180000, inputMode = 'text_only', referenceImages = [] }) {
@@ -127,3 +149,4 @@ async function generateImage({ baseUrl, apiKey, model, prompt, size = '', timeou
 module.exports = { imageEndpoint, generateImage, validateBase64Image };
 const { lookup } = require('node:dns/promises');
 const { isIP } = require('node:net');
+const https = require('node:https');

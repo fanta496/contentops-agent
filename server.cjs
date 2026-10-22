@@ -76,6 +76,7 @@ const stateStore = require('./lib/state.cjs')({
   CREDENTIALS, VISION_CREDENTIALS, FEISHU_CREDENTIALS,
   noteIdFromUrl,
   reserveCall,
+  trackOperation: (kind, label) => operationRegistry.register({ kind, label }),
   // 在途任务锁：删除/重置前要用它判断有没有任务持有该实体
   get imageJobLocks() { return imageJobLocks; },
   // 下面这些在 server.cjs 里声明得晚，只在调用时取值，避免 TDZ
@@ -481,6 +482,7 @@ function estimatedCallCost(kind, inputChars, maxOutputTokens) {
 // 预算：一次真实收费调用 = 一张票据 + 一次幂等结算（台账见 lib/budget.cjs）。
 const { createBudgetLedger, createSpendGuard } = require('./lib/budget.cjs');
 const budgetLedger = createBudgetLedger();
+const operationRegistry = require('./lib/operations.cjs').createOperationRegistry();
 const BUDGET_HOLD_TTL_MS = 5 * 60 * 1000;
 const budgetGuard = createSpendGuard({
   ledger: budgetLedger,
@@ -1090,6 +1092,14 @@ async function withApiRetry(candidate, stage, action) {
 }
 
 async function analyzeCandidate(candidate) {
+  const operation = operationRegistry.register({ kind: 'analysis', label: '候选分析', entityId: candidate?.id || '' });
+  try {
+    return await analyzeCandidateInner(candidate);
+  } finally {
+    operation.done();
+  }
+}
+async function analyzeCandidateInner(candidate) {
   const generation = masterGeneration; if (masterStopped(generation)) return stopResult();
   if (candidate.detailStatus !== 'enriched' || (!String(candidate.body || '').trim() && !(candidate.imageUrls || []).length)) return { ok: false, code: 'DETAIL_REQUIRED', message: '该素材没有可分析的正文或图片详情' };
   if (!aiReady()) return { ok: false, code: 'TEXT_AI_NOT_CONFIGURED', message: '还需配置并验证文本模型 API' };
@@ -1433,6 +1443,14 @@ function normalizeGeneratedVariants(candidate, variants, count) {
 }
 
 async function generateWithAi(candidate, count = state.settings.generationCount, context = '', { requireMaster = true } = {}) {
+  const operation = operationRegistry.register({ kind: 'creation', label: 'AI 生产', entityId: candidate?.id || '' });
+  try {
+    return await generateWithAiInner(candidate, count, context, { requireMaster });
+  } finally {
+    operation.done();
+  }
+}
+async function generateWithAiInner(candidate, count = state.settings.generationCount, context = '', { requireMaster = true } = {}) {
   const generation = masterGeneration; if (requireMaster && masterStopped(generation)) return stopResult();
   if (!aiReady() && process.env.CONTENTOPS_TEST_ALLOW_UNVERIFIED !== '1') return { ok: false, code: 'AI_NOT_CONFIGURED', message: '还需配置并验证模型 API' };
   if (budgetRemaining() <= 0) return { ok: false, code: 'BUDGET_LIMIT', message: '今日 AI 预算已耗尽' };
@@ -1769,7 +1787,7 @@ function startVariantImageJob(item, pageIds = [], options = {}) {
   const startedAt = now();
   item.imageJob = normalizeImageJob({ id:uid('imagejob'), variantId:item.id, requestKey, status:'queued', targetPageIds:targets.map((page)=>page.id), total:targets.length, completed:0, failed:0, startedAt, updatedAt:startedAt, deadlineAt:new Date(Date.now()+rules.jobTimeoutMs).toISOString(), message:'图片任务已进入队列' }, item.id);
   item.imageStatus = 'queued'; saveState();
-  const task = (async () => {
+  const task = operationRegistry.register({ kind: 'image', label: '生图任务', entityId: item.id }).track(async () => {
     const enterprise = state.enterpriseProfiles.find((entry) => entry.id === state.activeEnterpriseProfileId && entry.status === 'active') || {};
     const connection = activeConnection('image');
     const policy = ['auto', 'required', 'disabled'].includes(item.imageReferencePolicy) ? item.imageReferencePolicy : 'auto';
@@ -1909,12 +1927,22 @@ async function handleAction(route, body) {
   if (route === '/api/data/reset') {
     // 清空数据前必须先让在途任务失效，否则旧任务会继续跑、继续产生费用，甚至把结果写回已清空的状态。
     // 真实在途检查：不只是扫描 state.variants 里的状态，还要看进程内的锁与 Promise。
-    const busy = [];
-    if (currentImageJobs().length || imageJobLocks.size) busy.push('生图任务');
-    if (creationJobLocks.size) busy.push('AI 生产任务');
-    if (collectionLocks.size) busy.push('采集任务');
-    if (workflowPromise) busy.push('工作流');
-    if (busy.length) return { ok: false, code: 'TASK_RUNNING', message: `还有${busy.join('、')}在运行；请等它结束或先停止总控，再清空数据，避免清空后仍被计费` };
+    // 统一注册表是主判据：凡是登记过的收费/长任务都在里面（生图、AI 生产、候选分析、连接测试）。
+    const running = operationRegistry.busy();
+    const legacy = [];
+    if (currentImageJobs().length || imageJobLocks.size) legacy.push('生图任务');
+    if (creationJobLocks.size) legacy.push('AI 生产任务');
+    if (collectionLocks.size) legacy.push('采集任务');
+    if (workflowPromise) legacy.push('工作流');
+    const busyLabels = [...running.map((item) => `${item.kind}×${item.count}`), ...legacy];
+    if (busyLabels.length) {
+      return {
+        ok: false,
+        code: 'TASK_RUNNING',
+        message: `还有${[...new Set(busyLabels)].join('、')}在运行；请等它结束或先停止总控，再清空数据，避免清空后仍被计费`,
+        running: operationRegistry.list()
+      };
+    }
     masterGeneration += 1;
     for (const run of state.workflowRuns) cancelOpenRun(run);
     budgetLedger.reset();
