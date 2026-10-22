@@ -394,6 +394,23 @@ class DouyinCollector {
 
   async resolveClickTargets(client, searchUrl, targets, { delayMs = 1500, shouldStop, scrollTop = 0 } = {}) {
     const results = []; let unresolved = 0; let attempted = 0; let resolved = 0;
+    // 图文详情是全屏弹层、URL 不变，拿不到 /note/<id>。
+    // 但点开时页面自己会请求 /aweme/v1/web/aweme/detail/，响应里有 aweme_id，
+    // 而且请求已带页面自己的签名，不需要我们再算 a_bogus。
+    const detailCaptures = [];
+    await client.command('Network.enable', {}, 8000).catch(() => {});
+    const offDetail = client.on('Network.responseReceived', (params) => {
+      const url = String(params?.response?.url || '');
+      if (!/aweme\/v1\/web\/aweme\/detail/.test(url)) return;
+      const requestId = params?.requestId;
+      if (!requestId) return;
+      client.command('Network.getResponseBody', { requestId }, 8000).then((response) => {
+        try {
+          const detail = JSON.parse(response?.body || '{}')?.aweme_detail;
+          if (detail?.aweme_id) detailCaptures.push(detail);
+        } catch {}
+      }).catch(() => {});
+    });
     for (let index = 0; index < (targets || []).length; index += 1) {
       if (shouldStop?.()) return { stopped:true, results, unresolved, attempted, resolved };
       const target = targets[index];
@@ -448,11 +465,25 @@ class DouyinCollector {
       if (!await waitInterruptibly(Math.max(700, Math.min(2500, delayMs)), shouldStop)) return { stopped:true, results, unresolved, attempted, resolved };
       const currentUrl = String(await client.evaluate('location.href') || '');
       const identity = workIdentity(currentUrl);
+      if (!identity.id) {
+        // 最多等 6 秒：弹层打开后详情请求才会发出
+        for (let poll = 0; poll < 30 && !detailCaptures.length; poll += 1) {
+          if (!await waitInterruptibly(200, shouldStop)) break;
+        }
+      }
+      if (!identity.id && detailCaptures.length) {
+        const detail = detailCaptures.pop();
+        const id = String(detail.aweme_id);
+        resolved += 1;
+        results.push({ id, url: `${this.detailBaseUrl}/note/${id}`, title: target.title || String(detail.desc || '').slice(0, 80), rawText: target.rawText, coverUrl: target.coverUrl, fromDetailApi: true });
+      } else
       if (identity.id && !identity.conflict) { resolved += 1; results.push({ id:identity.id, url:currentUrl, title:target.title, rawText:target.rawText, coverUrl:target.coverUrl, isVideo:/\/video\//.test(currentUrl), hasImageHint:target.hasImageHint, resolvedFromClick:true }); }
       else unresolved += 1;
       if (!await this.navigateWithStop(client, searchUrl, Math.max(500, Math.min(1400, delayMs)), shouldStop)) return { stopped:true, results, unresolved, attempted, resolved };
       if (!await this.restoreSearchScroll(client, scrollTop, shouldStop)) return { stopped:true, results, unresolved, attempted, resolved };
     }
+    offDetail?.();
+
     return { stopped:false, results, unresolved, attempted, resolved };
   }
 
