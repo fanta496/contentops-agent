@@ -15,7 +15,7 @@ const { spawn } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `privacy-${process.pid}`);
-const PORT = 18000 + ((process.pid + 13) % 120);
+const PORT = 18440 + ((process.pid + 13) % 120);
 const TEXT_KEY = 'sk-privacy-text-abc123';
 const VISION_KEY = 'sk-privacy-vision-def456';
 const FEISHU = 'https://open.feishu.cn/open-apis/bot/v2/hook/privacy-test-hook';

@@ -17,7 +17,7 @@ const { spawn } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '..');
 const FIXTURE = path.join(__dirname, 'fixtures', 'state-v1.json');
 const DATA_DIR = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `upgrade-${process.pid}`);
-const PORT = 18200 + ((process.pid + 7) % 120);
+const PORT = 18580 + ((process.pid + 7) % 120);
 
 function request(method, urlPath, body) {
   return new Promise((resolve, reject) => {
