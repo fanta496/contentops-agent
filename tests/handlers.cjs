@@ -62,6 +62,11 @@ async function main() {
   fs.rmSync(DATA_DIR, { recursive: true, force: true });
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
+  // 模拟上次进程崩溃时留下的未结清票据：启动后必须按保守口径入账
+  fs.writeFileSync(path.join(DATA_DIR, 'budget-holds.json'), JSON.stringify([
+    { id: 'hold_crash_1', kind: 'text', amount: 0.5, purpose: '崩溃前未结清', state: 'held' }
+  ]), 'utf8');
+
   const child = spawn(process.execPath, [path.join(ROOT, 'server.cjs')], {
     cwd: ROOT,
     env: { ...process.env, CONTENTOPS_DATA_DIR: DATA_DIR, CONTENTOPS_PORT: String(PORT) },
@@ -87,7 +92,33 @@ async function main() {
     if (tested.status >= 500) problems.push(`测试连接返回 ${tested.status}：${JSON.stringify(tested.body).slice(0, 160)}`);
     if (/is not defined|ReferenceError/.test(JSON.stringify(tested.body))) problems.push(`测试连接抛出未定义引用：${JSON.stringify(tested.body).slice(0, 160)}`);
 
+    // 4. 图片预算 ¥1、单张 ¥1：连续两次连接测试，第二次必须被预算拦下
+    await request('POST', '/api/settings/save', {
+      xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['壁纸'],
+      imageDailyBudget: 1, imageCostPerImage: 1
+    });
+    const imageProfile = await request('POST', '/api/model-profile/save', {
+      kind: 'image', name: '图片回归档案', baseUrl: 'http://127.0.0.1:9', model: 'img-test', maxOutputTokens: 100, requestTimeoutSeconds: 5, imageInputMode: 'text_only'
+    });
+    const imageProfileId = imageProfile.body?.profile?.id;
+    await request('POST', '/api/ai/credential/save', { apiKey: 'sk-handler-regression' });
+    const firstTest = await request('POST', '/api/model-profile/test', { kind: 'image', id: imageProfileId });
+    if (firstTest.status >= 500) problems.push(`图片连接测试返回 ${firstTest.status}`);
+    const afterFirst = await request('GET', '/api/state');
+    const spentAfterFirst = Number(afterFirst.body?.settings?.imageSpentToday || 0);
+    if (spentAfterFirst < 1) problems.push(`第一次图片测试后 imageSpentToday=${spentAfterFirst}，应至少按保守口径记 ¥1`);
+    const secondTest = await request('POST', '/api/model-profile/test', { kind: 'image', id: imageProfileId });
+    const secondJson = JSON.stringify(secondTest.body || {});
+    if (secondTest.body?.ok === true) problems.push('预算已耗尽时第二次图片测试仍返回成功');
+    if (!/BUDGET|预算/.test(secondJson)) problems.push(`第二次测试没有被预算拦下：${secondJson.slice(0, 160)}`);
+
     // 4. 其它带预算/注册表依赖的入口也点一下
+    // 崩溃恢复：未结清票据要按保守口径计入当日消费
+    const recoveredState = await request('GET', '/api/state');
+    if (Number(recoveredState.body?.settings?.spentToday || 0) < 0.5) {
+      problems.push(`崩溃恢复未生效：spentToday=${recoveredState.body?.settings?.spentToday}`);
+    }
+
     for (const [label, path, body] of [
       ['连接测试(视觉)', '/api/model-profile/test', { kind: 'vision', id: profileId }],
       ['清理待审', '/api/variant/cleanup', {}],
@@ -106,7 +137,7 @@ async function main() {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
   }
 
-  console.log(JSON.stringify({ ok: problems.length === 0, checks: 5, problems }, null, 2));
+  console.log(JSON.stringify({ ok: problems.length === 0, checks: 9, problems }, null, 2));
   if (problems.length) process.exitCode = 1;
 }
 

@@ -59,6 +59,7 @@ run('接口行为快照 tests/api-smoke.cjs', process.execPath, [path.join(ROOT,
 run('升级兼容 tests/upgrade.cjs', process.execPath, [path.join(ROOT, 'tests', 'upgrade.cjs')]);
 run('模块依赖审计 tests/module-refs.cjs', process.execPath, [path.join(ROOT, 'tests', 'module-refs.cjs')]);
 run('隐私检查 tests/privacy.cjs', process.execPath, [path.join(ROOT, 'tests', 'privacy.cjs')]);
+run('处理器冒烟 tests/handlers.cjs', process.execPath, [path.join(ROOT, 'tests', 'handlers.cjs')]);
 run('调用点检查 tests/call-refs.cjs', process.execPath, [path.join(ROOT, 'tests', 'call-refs.cjs')]);
 run('ctx 契约 tests/ctx-contract.cjs', process.execPath, [path.join(ROOT, 'tests', 'ctx-contract.cjs')]);
 run('容器引用 tests/container-refs.cjs', process.execPath, [path.join(ROOT, 'tests', 'container-refs.cjs')]);

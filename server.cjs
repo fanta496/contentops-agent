@@ -11,7 +11,7 @@ const { XiaohongshuCreatorCenterCollector, numberFromText, percentFromText, seco
 const { resolveChromeRuntime } = require('./collector/chrome-runtime.cjs');
 const { callJson } = require('./ai/openai-compatible.cjs');
 const { callVisionJson, VISION_TEST_IMAGE_URL } = require('./ai/vision-compatible.cjs');
-const { generateImage } = require('./ai/image-compatible.cjs');
+const { generateImage, downloadImageUrl: downloadRemoteImage } = require('./ai/image-compatible.cjs');
 const { SYSTEM, candidateTextAnalysisPrompt, candidateVisionPrompt, candidateSynthesisPrompt, generationPrompt, imageQualityPrompt, performancePrompt } = require('./ai/prompts.cjs');
 const { CredentialStore } = require('./ai/credential-store.cjs');
 const { clamp, sleep, now, uid, finiteNumber, safeText, promptText, localDay, localClock, normalizeClock, normalizeKeywords, normalizeTextList } = require('./lib/util.cjs');
@@ -448,21 +448,21 @@ function estimateCost(kind, usage = {}, connection = activeConnection(kind)) {
   return Number((input + output).toFixed(4));
 }
 function recordAiUsage(usage, purpose, holdId = '') {
-  if (holdId) budgetLedger.settle(holdId, { actualCost: estimateCost('text', usage) });
+  if (holdId) finalizeHold(holdId, 'settled');
   const cost = estimateCost('text', usage);
   state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
 function recordVisionUsage(usage, purpose, holdId = '') {
-  if (holdId) budgetLedger.settle(holdId, { actualCost: estimateCost('vision', usage) });
+  if (holdId) finalizeHold(holdId, 'settled');
   const cost = estimateCost('vision', usage);
   state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `视觉输入 ${usage.inputTokens || 0} tokens · 输出 ${usage.outputTokens || 0} tokens · 计费 ¥${cost.toFixed(4)}`);
   return cost;
 }
 function recordImageUsage(usage, purpose, holdId = '') {
-  if (holdId) budgetLedger.settle(holdId, { actualCost: Number((estimateCost('image', usage) + Number(state.settings.imageCostPerImage || 0)).toFixed(4)) });
+  if (holdId) finalizeHold(holdId, 'settled');
   const cost = Number((estimateCost('image', usage) + Number(state.settings.imageCostPerImage || 0)).toFixed(4));
   state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + cost).toFixed(4));
   addActivity('info', `${purpose} API 调用完成`, `计费 ¥${cost.toFixed(4)}`);
@@ -486,12 +486,54 @@ const budgetGuard = createSpendGuard({
   spentOf: (kind) => (kind === 'vision' ? Number(state.settings.visionSpentToday) : kind === 'image' ? Number(state.settings.imageSpentToday) : Number(state.settings.spentToday))
 });
 
-// 过期票据按「可能已经花掉」保守入账，绝不放回额度。
+// 所有「可能已经花掉的钱」都从这里入业务账本（成功走 record*Usage，失败/未知走这里）。
+function chargeToSpent(kind, amount, note = '') {
+  const value = Number(Math.max(0, Number(amount) || 0).toFixed(4));
+  if (!value) return 0;
+  if (kind === 'vision') state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + value).toFixed(4));
+  else if (kind === 'image') state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + value).toFixed(4));
+  else state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + value).toFixed(4));
+  addActivity('info', '预算按保守口径入账', `${note || '未知调用'} ¥${value.toFixed(4)}`);
+  return value;
+}
+
+// 票据落盘：进程崩了也要知道"可能有未结清的费用"
+const BUDGET_HOLDS_FILE = path.join(DATA_DIR, 'budget-holds.json');
+function persistBudgetHolds() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(BUDGET_HOLDS_FILE, JSON.stringify(budgetLedger.snapshot().tickets, null, 2), 'utf8');
+  } catch {}
+}
+// 启动时把上次未结清的票据按保守口径入账（它们代表的请求可能已经发出并计费）
+function recoverBudgetHolds() {
+  try {
+    if (!fs.existsSync(BUDGET_HOLDS_FILE)) return;
+    const pending = JSON.parse(fs.readFileSync(BUDGET_HOLDS_FILE, 'utf8'));
+    let recovered = 0;
+    for (const ticket of Array.isArray(pending) ? pending : []) {
+      const amount = Number(ticket?.amount) || 0;
+      const kind = ['text', 'vision', 'image'].includes(ticket?.kind) ? ticket.kind : 'text';
+      if (amount > 0) { chargeToSpent(kind, amount, `崩溃恢复：${ticket?.purpose || ''}`); recovered += 1; }
+    }
+    fs.rmSync(BUDGET_HOLDS_FILE, { force: true });
+    if (recovered) addActivity('warning', '已恢复未结清预算', `上次未结清 ${recovered} 笔，已按保守口径计入当日消费`);
+  } catch {}
+}
+
+// 唯一的票据终结入口：成功由 record*Usage 入账；失败/未知按估算保守入账；未发出才不计费。
+function finalizeHold(holdId, outcome = 'settled') {
+  if (!holdId) return { ok: false, code: 'NO_HOLD' };
+  const closed = budgetLedger.finalize(holdId, outcome);
+  if (!closed.ok) return closed;
+  if (outcome !== 'settled' && outcome !== 'cancelled' && closed.amount > 0) chargeToSpent(closed.kind, closed.amount, closed.purpose);
+  persistBudgetHolds();
+  return closed;
+}
+
 function reapExpiredHolds() {
   for (const expired of budgetLedger.sweepExpired()) {
-    if (expired.kind === 'vision') state.settings.visionSpentToday = Number((Number(state.settings.visionSpentToday || 0) + expired.amount).toFixed(4));
-    else if (expired.kind === 'image') state.settings.imageSpentToday = Number((Number(state.settings.imageSpentToday || 0) + expired.amount).toFixed(4));
-    else state.settings.spentToday = Number((Number(state.settings.spentToday || 0) + expired.amount).toFixed(4));
+    chargeToSpent(expired.kind, expired.amount, `超时未结清：${expired.purpose || ''}`);
     addActivity('warning', '预算预留超时', `${expired.purpose || '未知调用'} 未按时结清，已按保守口径计入 ¥${expired.amount.toFixed(4)}`);
   }
 }
@@ -507,6 +549,7 @@ function reserveCall(kind, inputChars, maxOutputTokens, purpose, fixedCost = 0) 
   const amount = Number((estimatedCallCost(kind, inputChars, maxOutputTokens) + Math.max(0, Number(fixedCost) || 0)).toFixed(6));
   const hold = budgetGuard.reserve({ kind, amount, purpose, ttlMs: BUDGET_HOLD_TTL_MS });
   if (!hold.ok) return hold;
+  persistBudgetHolds();
   return {
     ok: true,
     id: hold.id,
@@ -1070,7 +1113,7 @@ function isTransientApiError(error) {
   return /timeout|timed out|abort|fetch failed|ECONN|ENET|socket|network|HTTP (408|409|425|429|500|502|503|504)|资源不足|upstream/i.test(message);
 }
 function retryAt(attempt) { return new Date(Date.now() + Math.min(60000, 1500 * (2 ** Math.max(0, attempt - 1)))).toISOString(); }
-async function withApiRetry(candidate, stage, action) {
+async function withApiRetry(candidate, stage, action, { budgetKind = '', budgetEstimate = 0, budgetPurpose = '' } = {}) {
   const maximum = finiteNumber(state.settings.analysisAutoRetryCount, 2, 0, 3);
   let attempt = 0;
   while (true) {
@@ -1080,7 +1123,18 @@ async function withApiRetry(candidate, stage, action) {
       candidate.analysisTask ||= {};
       candidate.analysisTask[stage] = { status: attempt <= maximum && isTransientApiError(error) ? 'retrying' : 'failed', attempts:attempt, lastError:safeText(error.message, 800), nextRetryAt:attempt <= maximum && isTransientApiError(error) ? retryAt(attempt) : '', updatedAt:now() };
       saveState();
+      // 失败的那次请求可能已经计费：按估算保守入账，不当作免费。
+      if (budgetKind && budgetEstimate > 0) chargeToSpent(budgetKind, budgetEstimate, `${budgetPurpose || stage} 第${attempt}次尝试失败`);
       if (attempt > maximum || !isTransientApiError(error)) throw error;
+      // 重试前重新检查额度：不够就立刻停，不再发出新请求。
+      if (budgetKind) {
+        const remaining = budgetRemainingAfterHolds(budgetKind);
+        const nextEstimate = Number(budgetEstimate) || 0;
+        if (nextEstimate > remaining) {
+          addActivity('warning', `${stage}重试被预算拦下`, `剩余 ¥${remaining.toFixed(4)}，下一次尝试预计 ¥${nextEstimate.toFixed(4)}`);
+          throw error;
+        }
+      }
       addActivity('warning', `${stage}临时失败，自动重试`, `${candidate.title} · 第${attempt}/${maximum}次：${error.message}`);
       await sleep(Math.min(60000, 1500 * (2 ** (attempt - 1))));
     }
@@ -1698,7 +1752,10 @@ async function resolveGeneratedImageBytes(result, timeoutMs = 180000) {
     let url;
     try { url = new URL(result.url); } catch { throw new Error('生图供应商返回的图片 URL 不合法'); }
     if (url.protocol !== 'https:') throw new Error('生图供应商返回的图片 URL 必须使用 HTTPS，不能保存不安全资源');
-    const response = await fetch(assertSafeRemoteImageUrl(url), { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
+    // 统一走 ai/image-compatible.cjs 里「校验 + 绑定 IP」的下载器，避免两套实现出现安全落差。
+  const safeUrl = assertSafeRemoteImageUrl(url);
+  const downloaded = await downloadRemoteImage(safeUrl.href, timeoutMs);
+  return downloaded;
     if (!response.ok) throw new Error(`下载生图供应商返回的图片失败：HTTP ${response.status}`);
     bytes = await readImageResponseBytes(response);
   } else throw new Error('生图模型没有返回 b64_json 或图片 URL');
@@ -1752,7 +1809,7 @@ async function reviewGeneratedImage(item, page, rules, enterprise) {
   if (!reservation.ok) return { score: 0, passed: false, summary: reservation.message, strengths: [], problems: [], retryPrompt: '', checkedAt: now(), model: '', attempts: 0 };
   let result;
   try { result = await callVisionJson({ ...connection, prompt, imageUrls:[imageUrl], allowDataImages:true, timeoutMs:Math.min(connection.requestTimeoutMs || 120000, rules.singleTimeoutMs), maxOutputTokens:Math.min(outputTokenLimit('vision', 1800), 1800) });
-  } catch (error) { reservation.abandon?.(); throw error; }
+  } catch (error) { finalizeHold(reservation.id, 'uncertain'); throw error; }
   recordVisionUsage(result.usage, `第${page.index}页视觉质检`, reservation.id);
   const data = result.data || {};
   const score = finiteNumber(data.score, 0, 0, 100);
@@ -1817,7 +1874,7 @@ function startVariantImageJob(item, pageIds = [], options = {}) {
           for (let attempt = 0; attempt <= rules.autoRetryCount; attempt += 1) {
             const reservation = reserveCall('image', prompt.length, 0, `第${page.index}页生图`, Number(state.settings.imageCostPerImage || 0)); if (!reservation.ok) throw new Error(reservation.message);
             let result; try { result = await generateImage({ ...connection, inputMode:effectiveInputMode, referenceImages, prompt, size:rules.size, timeoutMs:Math.min(connection.requestTimeoutMs || rules.singleTimeoutMs, rules.singleTimeoutMs) });
-            } catch (error) { reservation.abandon?.(); throw error; }
+            } catch (error) { finalizeHold(reservation.id, 'uncertain'); throw error; }
     result.referenceMode = effectiveInputMode; result.referenceAssetIds = referenceAssetIds;
             if (masterStopped(generation)) { failImageJob(item, 'cancelled', '人工总控已停止；当前返回图片不会写入'); return; }
             const priorAsset = page.asset;
@@ -1978,6 +2035,7 @@ function ensureActionRoutes() {
     get state() { return state; },
     reserveCall,
     trackOperation: (kind, label) => operationRegistry.register({ kind, label }),
+  finalizeHold,
     // 在途任务锁：删除/重置前判断有没有任务持有该实体（actions 模块要用）
     get imageJobLocks() { return imageJobLocks; },
     CREDENTIALS,
@@ -2138,6 +2196,8 @@ const server = http.createServer(async (req, res) => {
 
 try { createLock(); } catch (error) { process.stderr.write(`${error.message}\n`); process.exit(1); }
 server.listen(PORT, HOST, async () => {
+  // 预算票据的恢复必须在所有模块初始化完成后做（chargeToSpent 依赖 budget 区块里的常量）
+  recoverBudgetHolds();
   addActivity('success', '后台服务已启动', `http://${HOST}:${PORT}`); supervisorCheck();
   if (!SELF_TEST) return;
   // 离线自检显式开启总控，只覆盖测试进程；生产默认仍保持人工停止。

@@ -146,7 +146,7 @@ async function generateImage({ baseUrl, apiKey, model, prompt, size = '', timeou
   return { b64:downloaded.bytes.toString('base64'), url:'', revisedPrompt: asset.revised_prompt || '', usage: imageUsage(payload), downloadedFrom:url, mime:downloaded.mime };
 }
 
-module.exports = { imageEndpoint, generateImage, validateBase64Image };
+module.exports = { downloadImageUrl, imageEndpoint, generateImage, validateBase64Image };
 const { lookup } = require('node:dns/promises');
 const { isIP } = require('node:net');
 const https = require('node:https');
