@@ -93,6 +93,9 @@ const STEPS = [
 
 function normalize(value) {
   return JSON.parse(JSON.stringify(value, (key, raw) => {
+    if (typeof raw === 'string' && /^(usageDate|lastAutomaticSlot|day|date)$/i.test(key || '')) {
+      return String(raw).replace(/\d{4}-\d{2}-\d{2}/g, '<date>');
+    }
     if (typeof raw === 'string') {
       let text = raw;
       text = text.replace(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+/g, '<origin>');
@@ -101,9 +104,8 @@ function normalize(value) {
       text = text.replace(/\b[0-9a-f]{64}\b/g, '<sha256>');
       text = text.replace(/[A-Za-z]:\\\\?[^"']*/g, '<path>');
       text = text.replace(/\d{2}:\d{2}:\d{2}/g, '<clock>');
-      // 只有日期的字段（usageDate、lastAutomaticSlot 之外的一切 YYYY-MM-DD）也必须归一化，
-      // 否则基线会在第二天失效 —— 这类"日期敏感"失败最容易被当成真 bug。
-      text = text.replace(/\b\d{4}-\d{2}-\d{2}\b/g, '<date>');
+      // 只对「日期类字段」归一化（usageDate / lastAutomaticSlot / *At 之类），
+      // 不做全字符串替换 —— 否则业务里真正的日期字段被改坏也测不出来。
       return text;
     }
     if (typeof raw === 'number' && Number.isInteger(raw) && raw > 1e12) return '<epochms>';

@@ -39,7 +39,6 @@ checksums/
 launcher/bin/
 
 # Local-only notes and regression fixtures; keep these out of the public source snapshot.
-docs/
 qa/
 BUILDING.md
 CONTRIBUTING.md
