@@ -56,6 +56,8 @@ run('采集器契约 tests/collector-contract.cjs', process.execPath, [path.join
 run('节奏采样 tests/tempo.cjs', process.execPath, [path.join(ROOT, 'tests', 'tempo.cjs')]);
 run('浏览器路径 tests/chrome-runtime.cjs', process.execPath, [path.join(ROOT, 'tests', 'chrome-runtime.cjs')]);
 run('接口行为快照 tests/api-smoke.cjs', process.execPath, [path.join(ROOT, 'tests', 'api-smoke.cjs')]);
+run('升级兼容 tests/upgrade.cjs', process.execPath, [path.join(ROOT, 'tests', 'upgrade.cjs')]);
+run('隐私检查 tests/privacy.cjs', process.execPath, [path.join(ROOT, 'tests', 'privacy.cjs')]);
 run('离线自检 server.cjs --self-test', process.execPath, [path.join(ROOT, 'server.cjs'), '--self-test'], {
   env: { CONTENTOPS_CARD_RENDERER: path.join(ROOT, 'launcher', 'bin', 'CardRenderer.exe') }
 });
