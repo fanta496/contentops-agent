@@ -52,6 +52,7 @@ for (const dir of ['lib', 'collector', 'ai', 'tests']) {
 for (const file of sourceFiles) run(`语法检查 ${file}`, process.execPath, ['--check', path.join(ROOT, file)], { timeout: 60000 });
 
 run('安全回归 tests/security-regression.cjs', process.execPath, [path.join(ROOT, 'tests', 'security-regression.cjs')]);
+run('采集器契约 tests/collector-contract.cjs', process.execPath, [path.join(ROOT, 'tests', 'collector-contract.cjs')]);
 run('接口行为快照 tests/api-smoke.cjs', process.execPath, [path.join(ROOT, 'tests', 'api-smoke.cjs')]);
 run('离线自检 server.cjs --self-test', process.execPath, [path.join(ROOT, 'server.cjs'), '--self-test'], {
   env: { CONTENTOPS_CARD_RENDERER: path.join(ROOT, 'launcher', 'bin', 'CardRenderer.exe') }

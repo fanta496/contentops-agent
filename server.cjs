@@ -16,6 +16,7 @@ const { SYSTEM, candidateTextAnalysisPrompt, candidateVisionPrompt, candidateSyn
 const { CredentialStore } = require('./ai/credential-store.cjs');
 const { clamp, sleep, now, uid, finiteNumber, safeText, promptText, localDay, localClock, normalizeClock, normalizeKeywords, normalizeTextList } = require('./lib/util.cjs');
 const { detectImageMime, imageBytesMatchMime, imageExtension } = require('./lib/media.cjs');
+const { isSupported: isSupportedPlatform, describe: describePlatform } = require('./lib/platforms.cjs');
 
 const HOST = '127.0.0.1';
 const APP_ID = 'contentops-agent-v2';
@@ -1228,11 +1229,12 @@ async function runCollection(platform, { manual = false, workflowTrigger = manua
   const generation = masterGeneration;
   if (!state.settings.masterEnabled) return stopResult('人工总控处于停止状态，抓取不会启动');
   resetDailyUsageIfNeeded();
-  if (!['小红书', '抖音'].includes(platform)) return { ok: false, message: '不支持的平台' };
+  if (!isSupportedPlatform(platform)) return { ok: false, message: '不支持的平台' };
   if (!manual && !state.settings.collectionEnabled) return { ok: false, code: 'AUTOMATION_DISABLED', message: '24小时自动工作流已关闭' };
-  const currentAgent = state.agents.find((item) => item.id === (platform === '抖音' ? 'douyin-collector' : 'xhs-collector'));
+  const platformInfo = describePlatform(platform);
+  const currentAgent = state.agents.find((item) => item.id === (platformInfo ? platformInfo.agentId : 'xhs-collector'));
   if (!manual && ['needs_login', 'verification_required'].includes(currentAgent?.status)) return { ok: false, code: currentAgent.status === 'needs_login' ? 'LOGIN_REQUIRED' : 'CAPTCHA', message: currentAgent.detail || '小红书需要人工处理后才能恢复定时采集' };
-  const enabled = platform === '小红书' ? state.settings.xhsEnabled : state.settings.douyinEnabled;
+  const enabled = platformInfo ? state.settings[platformInfo.enabledKey] : false;
   if (!enabled) return { ok: false, message: `${platform}采集已关闭` };
   if (platform === '抖音' && douyinBrowserBusy()) return { ok: false, code: 'ALREADY_RUNNING', message: '抖音专用浏览器正在执行另一项采集、链接导入或登录任务，请等待完成' };
   if (platform === '小红书' && xhsBrowserBusy()) return { ok:false, code:'ALREADY_RUNNING', message:'小红书专用浏览器正在执行登录检查、链接导入或后台采样，请等待完成' };
