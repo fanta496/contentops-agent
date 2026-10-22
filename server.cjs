@@ -75,10 +75,6 @@ const stateStore = require('./lib/state.cjs')({
   normalizeKeywords, normalizeTextList, normalizeClock, localClock, localDay,
   CREDENTIALS, VISION_CREDENTIALS, FEISHU_CREDENTIALS,
   noteIdFromUrl,
-  reserveCall,
-  trackOperation: (kind, label) => operationRegistry.register({ kind, label }),
-  // 在途任务锁：删除/重置前要用它判断有没有任务持有该实体
-  get imageJobLocks() { return imageJobLocks; },
   // 下面这些在 server.cjs 里声明得晚，只在调用时取值，避免 TDZ
   hasFeishuWebhook: (...args) => hasFeishuWebhook(...args),
   normalizeImageRules: (...args) => normalizeImageRules(...args),
@@ -1980,6 +1976,10 @@ function ensureActionRoutes() {
   if (actionRoutes) return;
   actionContext = {
     get state() { return state; },
+    reserveCall,
+    trackOperation: (kind, label) => operationRegistry.register({ kind, label }),
+    // 在途任务锁：删除/重置前判断有没有任务持有该实体（actions 模块要用）
+    get imageJobLocks() { return imageJobLocks; },
     CREDENTIALS,
     FEISHU_CREDENTIALS,
     IMAGE_REFERENCE_TEST_PNG,

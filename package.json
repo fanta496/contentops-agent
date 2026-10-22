@@ -15,6 +15,10 @@
     "test": "node tests/run-all.cjs",
     "test:security": "node tests/security-regression.cjs",
     "test:api": "node tests/api-smoke.cjs",
-    "test:baseline": "node tests/api-smoke.cjs --write"
+    "test:baseline": "node tests/api-smoke.cjs --write",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "eslint": "^9.39.0"
   }
 }
