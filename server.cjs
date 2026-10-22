@@ -91,7 +91,12 @@ const stateStore = require('./lib/state.cjs')({
   ROOT,
   profileListFrom: (...args) => profileListFrom(...args),
   imageJobLocks: () => imageJobLocks,
-  creationJobLocks: () => creationJobLocks
+  creationJobLocks: () => creationJobLocks,
+  feishuWebhookUrl: (...args) => feishuWebhookUrl(...args),
+  normalizeEnterpriseProfile: (...args) => normalizeEnterpriseProfile(...args),
+  creatorRowKey: (...args) => creatorRowKey(...args),
+  json: (...args) => json(...args),
+  server: (...args) => server(...args)
 });
 const { initialState, normalizeState, applyTestOverrides, readStateFile, createLock, releaseLock } = stateStore;
 function publicState() { return stateStore.publicState(state, collectionLocks, workflowPromise, activeCollectors); }
