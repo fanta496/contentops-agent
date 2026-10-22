@@ -217,7 +217,127 @@ async function main() {
     fs.rmSync(dataD, { recursive: true, force: true });
   }
 
-  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 4, problems }, null, 2));
+  // ---------- 场景 E：重启两次、两次收费，费用必须正好两笔（票据 id 不得撞号） ----------
+  {
+    const providerE = await startMockProvider();
+    const dataE = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `billing-e-${process.pid}`);
+    fs.rmSync(dataE, { recursive: true, force: true });
+    fs.mkdirSync(dataE, { recursive: true });
+    const portE = 19300 + (process.pid % 80);
+    let profileId = '';
+    const runOneRound = async () => {
+      const child = startServer(dataE, portE);
+      try {
+        await waitForHealth(portE, Date.now() + 30000);
+        if (!profileId) {
+          const saved = await request(portE, 'POST', '/api/model-profile/save', {
+            kind: 'text', name: '重启档案', apiKey: 'sk-mock-key', baseUrl: `http://127.0.0.1:${providerE.port}`, model: 'mock-model',
+            inputPricePerMillion: 500, outputPricePerMillion: 500, maxOutputTokens: 100, requestTimeoutSeconds: 10
+          });
+          profileId = saved.body?.profile?.id;
+          await request(portE, 'POST', '/api/settings/save', {
+            xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['壁纸'], dailyBudget: 3
+          });
+        }
+        const tested = await request(portE, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId });
+        if (tested.body?.ok !== true) problems.push(`重启场景：测试未成功 ${JSON.stringify(tested.body).slice(0, 100)}`);
+      } finally {
+        await stop(child);
+      }
+    };
+    await runOneRound();
+    await runOneRound();
+    // 第三次启动：只读，不应产生补账
+    const child3 = startServer(dataE, portE);
+    let spent = 0;
+    let ids = [];
+    try {
+      await waitForHealth(portE, Date.now() + 30000);
+      const stateResponse = await request(portE, 'GET', '/api/state');
+      spent = Number(stateResponse.body?.settings?.spentToday || 0);
+    } finally {
+      await stop(child3);
+    }
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dataE, 'state.json'), 'utf8'));
+    ids = (onDisk.settings?.budgetJournal || []).map((entry) => entry.id);
+    const uniqueIds = new Set(ids);
+    if (providerE.state.requests !== 2) problems.push(`重启场景：供应商应收到 2 次请求，实际 ${providerE.state.requests}`);
+    if (Math.abs(spent - 1.4) > 0.01) problems.push(`重启场景：三次启动后费用应为 ¥1.40，实际 ¥${spent}`);
+    if (uniqueIds.size !== ids.length) problems.push(`票据 id 撞号：${ids.join(',')}`);
+    providerE.server.close();
+    fs.rmSync(dataE, { recursive: true, force: true });
+  }
+
+  // ---------- 场景 F：结算落盘失败一次 → 闸门关闭，第二次不得发出；重启后保守补账 ----------
+  {
+    const providerF = await startMockProvider();
+    const dataF = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `billing-f-${process.pid}`);
+    fs.rmSync(dataF, { recursive: true, force: true });
+    fs.mkdirSync(dataF, { recursive: true });
+    const portF = 19400 + (process.pid % 80);
+    // 第 1 次保存（预留）成功，第 2 次保存（结算）失败一次
+    const child = startServer(dataF, portF, { CONTENTOPS_SIMULATE_SAVE_FAILURE_AFTER: '1' });
+    let spentDuring = 0;
+    let profileId = '';
+    try {
+      await waitForHealth(portF, Date.now() + 30000);
+      const saved = await request(portF, 'POST', '/api/model-profile/save', {
+        kind: 'text', name: '故障档案', apiKey: 'sk-mock-key', baseUrl: `http://127.0.0.1:${providerF.port}`, model: 'mock-model',
+        inputPricePerMillion: 500, outputPricePerMillion: 500, maxOutputTokens: 100, requestTimeoutSeconds: 10
+      });
+      profileId = saved.body?.profile?.id;
+      await request(portF, 'POST', '/api/settings/save', {
+        xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['壁纸'], dailyBudget: 1
+      });
+      await request(portF, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId });
+      const second = await request(portF, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId });
+      spentDuring = Number((await request(portF, 'GET', '/api/state')).body?.settings?.spentToday || 0);
+      if (second.body?.ok === true) problems.push('结算落盘失败后第二次请求仍被放行');
+      if (providerF.state.requests !== 1) problems.push(`结算落盘失败后不应再请求供应商，实际 ${providerF.state.requests} 次`);
+      if (spentDuring !== 0) problems.push(`结算失败时内存费用应回滚为 0，实际 ¥${spentDuring}`);
+    } finally {
+      await stop(child);
+    }
+    // 重启：held 票据按保守口径补回 ¥0.7，且只补一次
+    const child2 = startServer(dataF, portF);
+    let spentAfter = 0;
+    try {
+      await waitForHealth(portF, Date.now() + 30000);
+      spentAfter = Number((await request(portF, 'GET', '/api/state')).body?.settings?.spentToday || 0);
+    } finally {
+      await stop(child2);
+    }
+    if (Math.abs(spentAfter - 0.7) > 0.01) problems.push(`重启后应保守补回 ¥0.70，实际 ¥${spentAfter}`);
+    providerF.server.close();
+    fs.rmSync(dataF, { recursive: true, force: true });
+  }
+
+  // ---------- 场景 G：日志裁剪不得丢掉在途票据（1 条 held + 260 条终态） ----------
+  {
+    const dataG = path.join(os.tmpdir(), 'ContentOpsAgentV2-QA', `billing-g-${process.pid}`);
+    fs.rmSync(dataG, { recursive: true, force: true });
+    fs.mkdirSync(dataG, { recursive: true });
+    const journal = [
+      { id: 'hold_old_held', kind: 'text', amount: 0.25, purpose: '在途票据', status: 'held', createdAt: new Date().toISOString() }
+    ];
+    for (let index = 0; index < 260; index += 1) {
+      journal.push({ id: `hold_done_${index}`, kind: 'text', amount: 0.01, purpose: '历史终态', status: 'settled', actualCost: 0.01, createdAt: new Date().toISOString() });
+    }
+    fs.writeFileSync(path.join(dataG, 'state.json'), JSON.stringify({ version: 2, mode: 'workflow-agent', settings: { budgetJournal: journal } }), 'utf8');
+    const portG = 19500 + (process.pid % 80);
+    const child = startServer(dataG, portG);
+    try {
+      await waitForHealth(portG, Date.now() + 30000);
+      const stateResponse = await request(portG, 'GET', '/api/state');
+      const spent = Number(stateResponse.body?.settings?.spentToday || 0);
+      if (Math.abs(spent - 0.25) > 0.001) problems.push(`裁剪场景：应只补在途的 ¥0.25，实际 ¥${spent}`);
+    } finally {
+      await stop(child);
+    }
+    fs.rmSync(dataG, { recursive: true, force: true });
+  }
+
+  console.log(JSON.stringify({ ok: problems.length === 0, scenarios: 7, problems }, null, 2));
   if (problems.length) process.exitCode = 1;
 }
 
