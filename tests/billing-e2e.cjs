@@ -356,28 +356,31 @@ async function main() {
     fs.rmSync(dataH, { recursive: true, force: true });
     fs.mkdirSync(dataH, { recursive: true });
     const portH = 19600 + (process.pid % 80);
+    // 注入点固定在启动后 3000ms 的第一次写盘：那时回收正好发生（票据 400ms 就过期）
     const child = startServer(dataH, portH, {
       CONTENTOPS_BUDGET_HOLD_TTL_MS: '400',
-      CONTENTOPS_SIMULATE_WRITE_EIO_AFTER_MS: '700'
+      CONTENTOPS_SIMULATE_WRITE_EIO_AFTER_MS: '3000'
     });
     try {
       await waitForHealth(portH, Date.now() + 30000);
       const saved = await request(portH, 'POST', '/api/model-profile/save', {
         kind: 'text', name: '挂起档案', apiKey: 'sk-mock-key', baseUrl: `http://127.0.0.1:${providerH.port}`, model: 'mock-model',
-        inputPricePerMillion: 500, outputPricePerMillion: 500, maxOutputTokens: 100, requestTimeoutSeconds: 2
+        inputPricePerMillion: 500, outputPricePerMillion: 500, maxOutputTokens: 100, requestTimeoutSeconds: 10
       });
       const profileId = saved.body?.profile?.id;
+      if (!profileId) problems.push(`挂起场景：档案保存失败 ${JSON.stringify(saved.body).slice(0, 120)}`);
       await request(portH, 'POST', '/api/settings/save', {
         xhsEnabled: true, douyinEnabled: false, xhsKeywords: ['内容运营'], douyinKeywords: ['壁纸'], dailyBudget: 1
       });
-      // 第一笔会一直挂着（供应商不响应），票据停在在途
+      // 第一笔：供应商不响应，票据停在在途（超时设 10s，保证不会自己结束）
       const pendingFirst = request(portH, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId }).catch(() => null);
-      await new Promise((resolve) => setTimeout(resolve, 1200)); // 超过 TTL 且超过注入时间点
+      await new Promise((resolve) => setTimeout(resolve, 2900)); // 等到注入点前
       const second = await request(portH, 'POST', '/api/model-profile/test', { kind: 'text', id: profileId });
       const bodyText = JSON.stringify(second.body || {});
       if (second.body?.ok === true) problems.push('超时回收写盘失败后仍放行了收费请求');
       if (!/BUDGET_LEDGER_(FAULT|UNAVAILABLE)|熔断|暂停/.test(bodyText)) problems.push(`超时回收写盘失败后没有明确拒绝：${bodyText.slice(0, 160)}`);
       if (providerH.state.requests > 1) problems.push(`熔断后不应再请求供应商，实际 ${providerH.state.requests} 次`);
+      if (providerH.state.requests < 1) problems.push('第一笔请求没有到达供应商，场景无效');
       await pendingFirst;
     } finally {
       await stop(child);
